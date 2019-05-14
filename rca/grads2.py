@@ -38,7 +38,7 @@ class CoeffGrad(GradParent, PowerMethod):
     D: float
         Upsampling factor.
     """
-    def __init__(self, data, S, VT, flux, sig, ker, ker_rot, D, data_type='float'):
+    def __init__(self, data, S, VT, M, flux, sig, ker, ker_rot, D, data_type='float'):
         self._grad_data_type = data_type
         self.obs_data = data
         self.op = self.MX 
@@ -76,10 +76,14 @@ class CoeffGrad(GradParent, PowerMethod):
         alpha: np.ndarray
             Current weights (after factorization by :math:`V^\\top`).
         """
-        A = alpha.dot(self.VT) 
+        A_stars = alpha.dot(self.VT)
+        A_gal = A_stars.dot(M)
         dec_rec = np.empty(self.obs_data.shape)
-        for j in range(dec_rec.shape[-1]):
-            dec_rec[:,:,j] = np.sum(A[:,j].reshape(-1,1,1)*self.FdS[:,j],axis=0)
+        N_stars, N_gal = A_stars.shape[1], A_gal.shape[1]
+        for j in range(N_stars):
+            dec_rec[:,:,j] = np.sum(A_stars[:,j].reshape(-1,1,1)*self.FdS[:,j],axis=0)
+        for j in range(N_gal):
+            dec_rec[:,:,N_stars+j] += np.sum(convolve(A_gal[:,j].reshape(-1,1,1)*self.dS, self.X_gal),axis=0)
         self._current_rec = dec_rec
         return self._current_rec
 
@@ -92,8 +96,11 @@ class CoeffGrad(GradParent, PowerMethod):
             Set of finer-grid images.
         """ 
         x = utils.reg_format(x)
-        STx = np.array([np.sum(FdS_i*x, axis=(1,2)) for FdS_i in self.FdS])
-        return STx.dot(self.VT.T)  
+        N_stars, N_gal = self.VT.shape[1], self.VT_gal.shape[1]
+        STx = np.array([np.sum(FdS_i*x[:N_stars], axis=(1,2)) for FdS_i in self.FdS])
+        STx_gal = np.array([np.sum(self.dS*convolve(x[N_stars+i],np.rot90(self.X_gal[i])), axis=(1,2)) for i in range(N_gal)]).T
+        STxVX = STx.dot(self.VT.T)+STx_gal.dot(self.VT.T).dot(M)
+        return STxVX  
     
     def cost(self, x, y=None, verbose=False):
         """ Compute data fidelity term. ``y`` is unused (it's just so ``modopt.opt.algorithms.Condat`` 
@@ -107,7 +114,7 @@ class CoeffGrad(GradParent, PowerMethod):
     def get_grad(self, x):
         """Compute current iteration's gradient.
         """
-        self.grad = self.MtX(self.MX(x) - self.obs_data)           
+        self.grad = self.MtX(self.MX(x) - self.obs_data)        
       
 
 class SourceGrad(GradParent, PowerMethod):
