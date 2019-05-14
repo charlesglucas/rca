@@ -8,6 +8,7 @@ import proxs as rca_prox
 import grads
 from modopt.opt.reweight import cwbReweight
 from scipy.interpolate import Rbf
+import sf_deconvolve
 
 def quickload(path):
     """ Load pre-fitted RCA model (saved with :func:`RCA.quicksave`).
@@ -70,7 +71,7 @@ class RCA(object):
             self.modopt_verb = False
         self.is_fitted = False
         
-    def fit(self, obs_data, obs_pos, S=None, VT=None, alpha=None,
+    def fit(self, obs_stars, obs_gal, stars_pos, gal_pos, S=None, VT=None, alpha=None,
             shifts=None, sigs=None, psf_size=None, psf_size_type='fwhm',
             flux=None, nb_iter=2, nb_subiter_S=200, nb_reweight=0, 
             nb_subiter_weights=None, n_eigenvects=5, graph_kwargs={}):
@@ -127,10 +128,13 @@ class RCA(object):
             List of optional kwargs to be passed on to the :func:`utils.GraphBuilder`.
         """
         
-        self.obs_data = np.copy(obs_data)
-        self.shap = self.obs_data.shape
+        self.obs_gal = np.copy(obs_gal)
+        self.obs_stars = np.copy(obs_stars)
+        self.shap = self.obs_stars.shape
         self.im_hr_shape = (self.upfact*self.shap[0],self.upfact*self.shap[1],self.shap[2])
-        self.obs_pos = obs_pos
+        self.stars_pos = stars_pos
+        self.gal_pos = gal_pos
+        self.obs_data = np.concatenate((self.obs_stars, self.obs_gal), axis=2)
         if S is None:
             self.S = np.zeros(self.im_hr_shape[:2] + (self.n_comp,))
         else:
@@ -163,10 +167,10 @@ class RCA(object):
             if self.verbose:
                 print '... Done.'
         else:
-            self.weights = self.alpha.dot(self.VT)
+            self.weights_stars = self.alpha.dot(self.VT)
         self._fit()
         self.is_fitted = True
-        return self.S, self.weights
+        return self.S, self.weights_stars
         
     def set_psf_size(self, psf_size, psf_size_type):
         """ Handles different "size" conventions."""
@@ -201,7 +205,7 @@ window of 7.5 pixels.''')
             raise ValueError('RCA instance has not yet been fitted to observations. Please run\
             the fit method.')
         RCA_params = {'n_comp': self.n_comp, 'upfact': self.upfact}
-        fitted_model = {'obs_pos': self.obs_pos, 'weights': self.weights, 'S': self.S,
+        fitted_model = {'obs_pos': self.stars_pos, 'weights': self.weights, 'S': self.S,
                         'flux_ref': self.flux_ref}
         np.save(path+'.npy', [RCA_params,fitted_model])
         
@@ -272,7 +276,7 @@ window of 7.5 pixels.''')
         self.init_filters = get_mr_filters(self.shap[:2], opt=self.opt_sig_init, coarse=True)
         # noise levels
         if self.sigs is None:
-            transf_data = rca_prox.apply_transform(self.obs_data, self.init_filters)
+            transf_data = rca_prox.apply_transform(self.obs_stars, self.init_filters)
             sigmads = np.array([1.4826*utils.mad(fs[0]) for fs in transf_data])
             self.sigs = sigmads / np.linalg.norm(self.init_filters[0])
         else:
@@ -280,11 +284,11 @@ window of 7.5 pixels.''')
         self.sig_min = np.min(self.sigs)
         # intra-pixel shifts
         if self.shifts is None:
-            thresh_data = np.copy(self.obs_data)
+            thresh_data = np.copy(self.obs_stars)
             cents = []
             for i in range(self.shap[2]):
                 # don't allow thresholding to be over 80% of maximum observed pixel
-                nsig_shifts = min(self.ksig_init,0.8*self.obs_data[:,:,i].max()/self.sigs[i])
+                nsig_shifts = min(self.ksig_init,0.8*self.obs_stars[:,:,i].max()/self.sigs[i])
                 thresh_data[:,:,i] = utils.HardThresholding(thresh_data[:,:,i], nsig_shifts*self.sigs[i])
                 cents += [utils.CentroidEstimator(thresh_data[:,:,i], sig=self.psf_size)]
             self.shifts = np.array([ce.return_shifts() for ce in cents])
@@ -292,45 +296,83 @@ window of 7.5 pixels.''')
                                                                               self.upfact)
         # flux levels
         if self.flux is None:
-            self.flux = utils.flux_estimate_stack(self.obs_data,rad=4)
+            self.flux = utils.flux_estimate_stack(self.obs_stars,rad=4)
         self.flux_ref = np.median(self.flux)
         # Normalize noise levels observed data
         self.sigs /= self.sig_min
-        self.obs_data /= self.sigs.reshape(1,1,-1)
+        self.obs_stars /= self.sigs.reshape(1,1,-1)
     
     def _initialize_graph_constraint(self):
-        gber = utils.GraphBuilder(self.obs_data, self.obs_pos, self.n_comp, 
+        gber = utils.GraphBuilder(self.obs_stars, self.stars_pos, self.n_comp, 
                                   n_eigenvects=self.n_eigenvects, verbose=self.verbose,
                                   **self.graph_kwargs)
         self.VT, self.alpha, self.distances = gber.VT, gber.alpha, gber.distances
         self.sel_e, self.sel_a = gber.sel_e, gber.sel_a
-        self.weights = self.alpha.dot(self.VT)
+        self.weights_stars = self.alpha.dot(self.VT)
         
-    def _fit(self):
-        weights = self.weights
+    def _fit(self, n_neighbors=15, rbf_function='thin_plate', shifts=None, flux=None,
+                     upfact=None, rca_format=False):
+        weights_stars = self.weights_stars
         comp = self.S
         alpha = self.alpha
+        
+        opts = vars(sf_deconvolve.get_opts(['-i', 'results/galaxies.npy'
+                    , '-p', 'results/galaxies_psf_estimate.npy',
+                    '-o', 'rca_deconvolved_galaxies',
+                    '-m', 'sparse']))
+        
         #### Source updates set-up ####
+        '''
+        n_gal, n_stars = self.gal_pos.shape[0], self.stars_pos.shape[0]
+        phi_g, phi_s = np.zeros((n_gal, n_stars)), np.zeros((n_stars, n_stars))
+        for k in range(n_stars):
+            for l in range(n_gal):
+                phi_g[l,k] = rbf_function(norm(self.gal_pos[l]-self.stars_pos[j]))
+            for j in range(n_stars):
+                phi_s[k,j] = inverse(rbf_function(norm(self.stars_pos[k]-self.stars_pos[j])))
+        M = phi_g.dot(phi_s)
+        '''
+        
+        # interpolate
+        ntest = self.gal_pos.shape[0]
+        weights_gal = np.empty((self.n_comp, ntest))
+        for j,pos in enumerate(self.gal_pos):
+            # determine neighbors
+            nbs, pos_nbs = utils.return_neighbors(pos, self.stars_pos, weights_stars.T, n_neighbors)
+            # train RBF and interpolate for each component
+            for i in range(self.n_comp):
+                rbfi = Rbf(pos_nbs[:,0], pos_nbs[:,1], nbs[:,i], function=rbf_function)
+                weights_gal[i,j] = rbfi(pos[0], pos[1])
+                    
         # initialize dual variable and compute Starlet filters for Condat source updates 
         dual_var = np.zeros((self.im_hr_shape))
         self.starlet_filters = get_mr_filters(self.im_hr_shape[:2], opt=self.opt, coarse=True)
         rho_phi = np.sqrt(np.sum(np.sum(np.abs(self.starlet_filters),axis=(1,2))**2))
         
+        # initialize psf
+        PSFs = self._transform(weights_gal)
+        if rca_format:
+            psf = PSFs
+        else:
+            psf = utils.reg_format(PSFs)
+            
+        for j in range(psf.shape[0]):
+            psf[j] /= psf[j].sum()
+            
+        reg_obs_gal = utils.reg_format(self.obs_gal)
+        est_gal, _, _ = sf_deconvolve.run(reg_obs_gal, psf, **opts)
+            
         # Set up source updates, starting with the gradient
-        source_grad = grads.SourceGrad(self.obs_data, weights, self.flux, self.sigs, 
-                                      self.shift_ker_stack, self.shift_ker_stack_adj, 
-                                      self.upfact, self.starlet_filters)
+        source_grad = grads.SourceGrad(self.obs_data, weights_stars, weights_gal, est_gal, self.flux, self.sigs, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact, self.starlet_filters)
 
         # sparsity in Starlet domain prox (this is actually assuming synthesis form)
         sparsity_prox = rca_prox.StarletThreshold(0) # we'll update to the actual thresholds later
 
         # and the linear recombination for the positivity constraint
-        lin_recombine = rca_prox.LinRecombine(weights, self.starlet_filters)
+        lin_recombine = rca_prox.LinRecombine(weights_stars, self.starlet_filters)
 
-        #### Weight updates set-up ####
-        # gradient
-        weight_grad = grads.CoeffGrad(self.obs_data, comp, self.VT, self.flux, self.sigs, 
-                                      self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact)
+        #### Weight updates set-up ####                
+        weight_grad = grads.CoeffGrad(self.obs_stars, comp, self.VT, self.flux, self.sigs, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact)
         
         # cost function
         weight_cost = costObj([weight_grad], verbose=self.modopt_verb) 
@@ -339,15 +381,38 @@ window of 7.5 pixels.''')
         # k-thresholding for spatial constraint
         iter_func = lambda x: np.floor(np.sqrt(x))+1
         coeff_prox = rca_prox.KThreshold(iter_func)
-        
 
         for k in range(self.nb_iter):
+            # interpolate
+            ntest = self.gal_pos.shape[0]
+            weights_gal = np.empty((self.n_comp, ntest))
+            for j,pos in enumerate(self.gal_pos):
+                # determine neighbors
+                nbs, pos_nbs = utils.return_neighbors(pos, self.stars_pos, weights_stars.T, n_neighbors)
+                # train RBF and interpolate for each component
+                for i in range(self.n_comp):
+                    rbfi = Rbf(pos_nbs[:,0], pos_nbs[:,1], nbs[:,i], function=rbf_function)
+                    weights_gal[i,j] = rbfi(pos[0], pos[1])
+                    
+            " ============================== Galaxies estimation =============================== "
+            PSFs = self._transform(weights_gal)
+            if rca_format:
+                psf = PSFs
+            else:
+                psf = utils.reg_format(PSFs)
+            
+            for j in range(psf.shape[0]):
+                psf[j] /= psf[j].sum()
+            
+            reg_obs_gal = utils.reg_format(self.obs_gal)
+            est_gal, _, _ = sf_deconvolve.run(reg_obs_gal, psf, **opts)
+                
             " ============================== Sources estimation =============================== "
             # update gradient instance with new weights...
-            source_grad.update_A(weights)
+            source_grad.update(weights_stars, weights_gal, est_gal)
             
             # ... update linear recombination weights...
-            lin_recombine.update_A(weights)
+            lin_recombine.update_A(weights_stars)
             
             # ... set optimization parameters...
             beta = source_grad.spec_rad + rho_phi
@@ -357,7 +422,7 @@ window of 7.5 pixels.''')
 
             # ... update sparsity prox thresholds...
             thresh = utils.reg_format(utils.acc_sig_maps(self.shap,self.shift_ker_stack_adj,self.sigs,
-                                                        self.flux,self.flux_ref,self.upfact,weights,
+                                                        self.flux,self.flux_ref,self.upfact,weights_stars,
                                                         sig_data=np.ones((self.shap[2],))*self.sig_min))
             thresholds = self.ksig*np.sqrt(np.array([filter_convolve(Sigma_k**2,self.starlet_filters**2) 
                                               for Sigma_k in thresh]))
@@ -387,7 +452,7 @@ window of 7.5 pixels.''')
             ind_select = range(comp.shape[2])
 
 
-            " ============================== Weights estimation =============================== "
+            " ============================== Weights estimation =============================== "        
             if k < self.nb_iter-1: 
                 # update sources and reset iteration counter for K-thresholding
                 weight_grad.update_S(comp)
@@ -396,7 +461,7 @@ window of 7.5 pixels.''')
                                                 beta_param=weight_grad.inv_spec_rad, auto_iterate=False)
                 weight_optim.iterate(max_iter=self.nb_subiter_weights)
                 alpha = weight_optim.x_final
-                weights_k = alpha.dot(self.VT)
+                weights_k = alpha.dot(V)
 
                 # renormalize to break scale invariance
                 weight_norms = np.sqrt(np.sum(weights_k**2,axis=1)) 
@@ -404,10 +469,10 @@ window of 7.5 pixels.''')
                 weights_k /= weight_norms.reshape(-1,1)
                 #TODO: replace line below with Fred's component selection 
                 ind_select = range(weights.shape[0])
-                weights = weights_k[ind_select,:]
+                weights_stars = weights_k[ind_select,:]
                 supports = None #TODO
     
-        self.weights = weights
+        self.weights_stars = weights_stars
         self.S = comp
         self.alpha = alpha
         source_grad.MX(transf_comp)
