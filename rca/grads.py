@@ -64,7 +64,6 @@ class CoeffGrad(GradParent, PowerMethod):
         self.FdS = np.array([[nf * degradation_op(S_j,shift_ker,self.D) 
                               for nf,shift_ker in zip(normfacs, utils.reg_format(self.ker))] 
                               for S_j in utils.reg_format(self.S)])
-        self.dS = np.array([utils.decim(S_j,self.D,av_en=0) for S_j in utils.reg_format(self.S)])
         if update_spectral_radius:
             PowerMethod.get_spec_rad(self)
             
@@ -154,12 +153,12 @@ class SourceGrad(GradParent, PowerMethod):
         
         self._current_rec = None # stores latest application of self.MX
         
-    def update(self, new_A_stars, new_A_gal, new_est_gal, update_spectral_radius=True):
+    def update(self, new_A_stars, new_A_gal, new_X_gal, update_spectral_radius=True):
         """Update current weights.
         """
         self.A_stars = new_A_stars
         self.A_gal = new_A_gal
-        self.est_gal = new_est_gal
+        self.X_gal = new_X_gal
         if update_spectral_radius:
             PowerMethod.get_spec_rad(self)
 
@@ -194,7 +193,8 @@ class SourceGrad(GradParent, PowerMethod):
         upsamp_x_gal = np.array([utils.transpose_decim(x_i,self.D) for x_i in x[upsamp_x_stars.shape[0]:]])
         x, upsamp_x_stars = utils.rca_format(x), utils.rca_format(upsamp_x_stars)
         xA = upsamp_x_stars.dot(self.A_stars.T)
-        xX = convolve_stack(upsamp_x_gal,np.rot90(self.X_gal, axes=(1,2)))
+        xX = np.array([filter_convolve(upsamp_x_i, self.X_gal, filter_rot=True)
+                             for upsamp_x_i in upsamp_x_gal])
         xX = utils.rca_format(xX)
         xXA_gal = xX.dot(self.A_gal.T)
         xXA = np.zeros(xA.shape)
