@@ -343,11 +343,7 @@ window of 7.5 pixels.''')
         
         # initialize psf
         PSFs = self._transform(weights_gal)
-        if rca_format:
-            psf = PSFs
-        else:
-            psf = utils.reg_format(PSFs)
-            
+        psf = utils.reg_format(PSFs)  
         for j in range(psf.shape[0]):
             psf[j] /= psf[j].sum()
             
@@ -388,11 +384,7 @@ window of 7.5 pixels.''')
                     
             " ============================== Galaxies estimation =============================== "
             PSFs = self._transform(weights_gal)
-            if rca_format:
-                psf = PSFs
-            else:
-                psf = utils.reg_format(PSFs)
-            
+            psf = utils.reg_format(PSFs)
             for j in range(psf.shape[0]):
                 psf[j] /= psf[j].sum()
             
@@ -486,9 +478,9 @@ window of 7.5 pixels.''')
         phi_g, phi_s = np.zeros((n_gal, n_stars)), np.zeros((n_stars, n_stars))
         for k in range(n_stars):
             for l in range(n_gal):
-                phi_g[l,k] = rbf_function(norm(self.gal_pos[l]-self.stars_pos[j]))
+                phi_g[l,k] = rbf_function(np.sqrt(sum((self.gal_pos[l]-self.stars_pos[k])**2)))
             for j in range(n_stars):
-                phi_s[k,j] = np.inverse(rbf_function(norm(self.stars_pos[k]-self.stars_pos[j])))
+                phi_s[k,j] = np.inverse(rbf_function(np.sqrt(sum((self.stars_pos[k]-self.stars_pos[j])**2))))
         M = phi_s.dot(phi_g)
                     
         # initialize dual variable and compute Starlet filters for Condat source updates 
@@ -499,11 +491,7 @@ window of 7.5 pixels.''')
         weights_gal = weights.dot(M)
         # initialize psf
         PSFs = self._transform(weights_gal)
-        if rca_format:
-            psf = PSFs
-        else:
-            psf = utils.reg_format(PSFs)
-            
+        psf = utils.reg_format(PSFs)           
         for j in range(psf.shape[0]):
             psf[j] /= psf[j].sum()
             
@@ -535,11 +523,7 @@ window of 7.5 pixels.''')
                     
             " ============================== Galaxies estimation =============================== "
             PSFs = self._transform(weights_gal)
-            if rca_format:
-                psf = PSFs
-            else:
-                psf = utils.reg_format(PSFs)
-            
+            psf = utils.reg_format(PSFs)
             for j in range(psf.shape[0]):
                 psf[j] /= psf[j].sum()
             

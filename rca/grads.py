@@ -4,7 +4,7 @@ from modopt.math.matrix import PowerMethod
 from modopt.signal.wavelet import filter_convolve
 import utils
 from scipy.signal import fftconvolve
-from modopt.math.convolve import convolve
+from modopt.math.convolve import convolve, convolve_stack
 
 def degradation_op(X, shift_ker, D):
     """ Shift and decimate fine-grid image."""
@@ -192,14 +192,15 @@ class SourceGrad(GradParent, PowerMethod):
         upsamp_x_stars = np.array([nf * adjoint_degradation_op(x_i,shift_ker,self.D) for nf,x_i,shift_ker 
                        in zip(normfacs, x, utils.reg_format(self.ker_rot))])
         upsamp_x_gal = np.array([utils.transpose_decim(x_i,self.D) for x_i in x[upsamp_x_stars.shape[0]:]])
-        x, upsamp_x_stars, upsamp_x_gal = utils.rca_format(x), utils.rca_format(upsamp_x_stars), utils.rca_format(upsamp_x_gal)
-        X_gal = utils.rca_format(self.X_gal)
+        x, upsamp_x_stars = utils.rca_format(x), utils.rca_format(upsamp_x_stars)
         xA = upsamp_x_stars.dot(self.A_stars.T)
-        xAX_gal = convolve(upsamp_x_gal,np.rot90(X_gal, axes=(1,2))).dot(self.A_gal.T)
-        xAX = np.zeros(xA.shape)
+        xX = convolve_stack(upsamp_x_gal,np.rot90(self.X_gal, axes=(1,2)))
+        xX = utils.rca_format(xX)
+        xXA_gal = xX.dot(self.A_gal.T)
+        xXA = np.zeros(xA.shape)
         for i in range(xA.shape[2]):
-            xAX[:,:,i] = xA[:,:,i] + xAX_gal[:,:,i]
-        return utils.apply_transform(xAX,self.filters)
+            xXA[:,:,i] = xA[:,:,i] + xXA_gal[:,:,i]
+        return utils.apply_transform(xXA,self.filters)
                 
     def cost(self, x, y=None, verbose=False):
         """ Compute data fidelity term. ``y`` is unused (it's just so 
