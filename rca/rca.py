@@ -511,10 +511,13 @@ window of 7.5 pixels.''')
         phi_g, phi_s = np.zeros((n_gal, n_stars)), np.zeros((n_stars, n_stars))
         for k in range(n_stars):
             for l in range(n_gal):
-                phi_g[l,k] = rbf_function(np.sqrt(sum((self.gal_pos[l]-self.stars_pos[k])**2)))
+                r = np.sqrt(sum((self.gal_pos[l]-self.stars_pos[k])**2))
+                phi_g[l,k] = r**2 * np.log(r)
             for j in range(n_stars):
-                phi_s[k,j] = np.inverse(rbf_function(np.sqrt(sum((self.stars_pos[k]-self.stars_pos[j])**2))))
-        M = phi_s.dot(phi_g)
+                r = np.sqrt(sum((self.stars_pos[k]-self.stars_pos[j])**2))
+                phi_s[k,j] = r**2 * np.log(r)
+        phi_s = np.linalg.inv(phi_s)
+        M = phi_g.dot(phi_s)
                     
         # initialize dual variable and compute Starlet filters for Condat source updates 
         dual_var = np.zeros((self.im_hr_shape))
