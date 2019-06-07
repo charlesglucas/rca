@@ -5,6 +5,7 @@ from modopt.signal.wavelet import filter_convolve
 import utils
 from scipy.signal import fftconvolve
 from modopt.math.convolve import convolve, convolve_stack
+import matplotlib.pyplot as plt
 
 def degradation_op(X, shift_ker, D):
     """ Shift and decimate fine-grid image."""
@@ -139,7 +140,7 @@ class SourceGrad(GradParent, PowerMethod):
         self.trans_op = self.MtX 
         self.A_stars = np.copy(A_stars)
         self.A_gal = np.copy(A_gal)
-        self.X_gal = X_gal
+        self.X_gal = np.copy(X_gal)
         self.flux = flux
         self.sig = sig
         self.ker = ker
@@ -181,6 +182,20 @@ class SourceGrad(GradParent, PowerMethod):
         dec_rec = np.array([nf * degradation_op(S.dot(A_stars_i),shift_ker,self.D) for nf,A_stars_i,shift_ker in zip(normfacs, self.A_stars.T, utils.reg_format(self.ker))] + [ convolve(utils.decim(S.dot(A_gal_i),self.D,av_en=0), X_gal_i) for A_gal_i,X_gal_i in zip(self.A_gal.T, self.X_gal)])
         self._current_rec = utils.rca_format(dec_rec)
         return self._current_rec
+    
+    def _plot_func(self, im, wind=False, cmap='gist_stern', title=''):
+        if not wind:
+            plt.imshow(im, cmap=cmap, interpolation='Nearest')
+        else:
+            vmin, vmax = wind
+            plt.imshow(im, cmap=cmap, interpolation='Nearest', vmin=vmin, vmax=vmax)
+        if title:
+            plt.title(title)
+        plt.colorbar()
+        plt.xticks([])
+        plt.yticks([])
+        plt.show()
+        plt.close()
 
     def MtX(self, x):
         """Adjoint to degradation operator :func:`MX`.
@@ -193,13 +208,13 @@ class SourceGrad(GradParent, PowerMethod):
         upsamp_x_gal = np.array([utils.transpose_decim(x_i,self.D) for x_i in x[upsamp_x_stars.shape[0]:]])
         x, upsamp_x_stars = utils.rca_format(x), utils.rca_format(upsamp_x_stars)
         xA = upsamp_x_stars.dot(self.A_stars.T)
-        xX = np.array([filter_convolve(upsamp_x_i, self.X_gal, filter_rot=True)
-                             for upsamp_x_i in upsamp_x_gal])
+        xX = convolve_stack(upsamp_x_gal, self.X_gal, rot_kernel=True)
         xX = utils.rca_format(xX)
         xXA_gal = xX.dot(self.A_gal.T)
-        xXA = np.zeros(xA.shape)
-        for i in range(xA.shape[2]):
-            xXA[:,:,i] = xA[:,:,i] + xXA_gal[:,:,i]
+        xXA = xA + xXA_gal
+        '''self._plot_func(xA[:,:,0], title='xA')
+        self._plot_func(xXA_gal[:,:,0])
+        self._plot_func(xXA[:,:,0])'''
         return utils.apply_transform(xXA,self.filters)
                 
     def cost(self, x, y=None, verbose=False):
@@ -216,3 +231,7 @@ class SourceGrad(GradParent, PowerMethod):
         """
 
         self.grad = self.MtX(self.MX(x) - self.obs_data)
+        '''y=x
+        for k in range(50):
+            y = y - self.grad
+        self._plot_func(y[0,0], title='y')'''

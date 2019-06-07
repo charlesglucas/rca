@@ -9,6 +9,7 @@ import grads
 from modopt.opt.reweight import cwbReweight
 from scipy.interpolate import Rbf
 import sf_deconvolve
+import matplotlib.pyplot as plt
 
 def quickload(path):
     """ Load pre-fitted RCA model (saved with :func:`RCA.quicksave`).
@@ -131,6 +132,7 @@ class RCA(object):
         self.obs_gal = np.copy(obs_gal)
         self.obs_stars = np.copy(obs_stars)
         self.shap = self.obs_stars.shape
+        self.shap_gal = self.obs_gal.shape
         self.im_hr_shape = (self.upfact*self.shap[0],self.upfact*self.shap[1],self.shap[2])
         self.stars_pos = stars_pos
         self.gal_pos = gal_pos
@@ -277,14 +279,20 @@ window of 7.5 pixels.''')
         """ Initialization tasks related to noise levels, shifts and flux. Note it includes
         renormalizing observed data, so needs to be ran even if all three are provided."""
         self.init_filters = get_mr_filters(self.shap[:2], opt=self.opt_sig_init, coarse=True)
+        self.init_filters_data = get_mr_filters(self.obs_data.shape[:2], opt=self.opt_sig_init, coarse=True)
         # noise levels
         if self.sigs is None:
             transf_data = rca_prox.apply_transform(self.obs_stars, self.init_filters)
             sigmads = np.array([1.4826*utils.mad(fs[0]) for fs in transf_data])
             self.sigs = sigmads / np.linalg.norm(self.init_filters[0])
+            
+            transf_data_data = rca_prox.apply_transform(self.obs_data, self.init_filters_data)
+            sigmads_data = np.array([1.4826*utils.mad(fs[0]) for fs in transf_data_data])
+            self.sigs_data = sigmads_data / np.linalg.norm(self.init_filters_data[0])
         else:
             self.sigs = np.copy(self.sigs)
         self.sig_min = np.min(self.sigs)
+        self.sig_min_data = np.min(self.sigs_data)
         # intra-pixel shifts
         if self.shifts is None:
             thresh_data = np.copy(self.obs_stars)
@@ -303,7 +311,10 @@ window of 7.5 pixels.''')
         self.flux_ref = np.median(self.flux)
         # Normalize noise levels observed data
         self.sigs /= self.sig_min
-        self.obs_stars /= self.sigs.reshape(1,1,-1)
+        self.sigs_data /= self.sig_min_data
+        self.obs_data /= self.sigs_data.reshape(1,1,-1)
+        self.obs_stars = self.obs_data[:,:,:self.shap[2]]
+        self.obs_gal = self.obs_data[:,:,self.shap[2]:]
     
     def _initialize_graph_constraint(self):
         gber = utils.GraphBuilder(self.obs_stars, self.stars_pos, self.n_comp, 
@@ -313,6 +324,20 @@ window of 7.5 pixels.''')
         self.sel_e, self.sel_a = gber.sel_e, gber.sel_a
         self.weights_stars = self.alpha.dot(self.VT)
         
+    def _plot_func(self, im, wind=False, cmap='gist_stern', title=''):
+        if not wind:
+            plt.imshow(im, cmap=cmap, interpolation='Nearest')
+        else:
+            vmin, vmax = wind
+            plt.imshow(im, cmap=cmap, interpolation='Nearest', vmin=vmin, vmax=vmax)
+        if title:
+            plt.title(title)
+        plt.colorbar()
+        plt.xticks([])
+        plt.yticks([])
+        plt.show()
+        plt.close()
+        
     def _fit(self, n_neighbors=15, rbf_function='thin_plate', shifts=None, flux=None,
                      upfact=None, rca_format=False):
         weights_stars = self.weights_stars
@@ -320,8 +345,8 @@ window of 7.5 pixels.''')
         alpha = self.alpha
         
         opts = vars(sf_deconvolve.get_opts(['-i', 'results/galaxies.npy'
-                    , '-p', 'results/galaxies_psf_estimate.npy',
-                    '-o', 'rca_deconvolved_galaxies',
+                    , '-p', 'results/galaxies_psf_truth.npy',
+                    '-o', 'true_deconvolved_galaxies',
                     '-m', 'sparse']))
         
         #### Source updates set-up ####
@@ -341,18 +366,23 @@ window of 7.5 pixels.''')
         self.starlet_filters = get_mr_filters(self.im_hr_shape[:2], opt=self.opt, coarse=True)
         rho_phi = np.sqrt(np.sum(np.sum(np.abs(self.starlet_filters),axis=(1,2))**2))
         
-        # initialize psf
-        PSFs = self._transform(weights_gal)
-        psf = utils.reg_format(PSFs)  
-        for j in range(psf.shape[0]):
-            psf[j] /= psf[j].sum()
+        PSFs = comp.dot(weights_gal)
+        psf = utils.reg_format(PSFs)
             
+        for j in range(psf.shape[0]):
+            if psf[j].sum() != 0:
+                psf[j] /= psf[j].sum()
+                
         reg_obs_gal = utils.reg_format(self.obs_gal)
         est_gal, _, _ = sf_deconvolve.run(reg_obs_gal, psf, **opts)
-            
+
+        for j in range(est_gal.shape[0]):
+            if est_gal[j].sum() != 0:
+                est_gal[j] /= est_gal[j].sum()
+
         # Set up source updates, starting with the gradient
         source_grad = grads.SourceGrad(self.obs_data, weights_stars, weights_gal, est_gal, self.flux, self.sigs, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact, self.starlet_filters)
-
+        
         # sparsity in Starlet domain prox (this is actually assuming synthesis form)
         sparsity_prox = rca_prox.StarletThreshold(0) # we'll update to the actual thresholds later
 
@@ -372,7 +402,6 @@ window of 7.5 pixels.''')
 
         for k in range(self.nb_iter):
             # interpolate
-            ntest = self.gal_pos.shape[0]
             weights_gal = np.empty((self.n_comp, ntest))
             for j,pos in enumerate(self.gal_pos):
                 # determine neighbors
@@ -383,14 +412,19 @@ window of 7.5 pixels.''')
                     weights_gal[i,j] = rbfi(pos[0], pos[1])
                     
             " ============================== Galaxies estimation =============================== "
-            PSFs = self._transform(weights_gal)
+            PSFs = comp.dot(weights_gal)
             psf = utils.reg_format(PSFs)
-            for j in range(psf.shape[0]):
-                psf[j] /= psf[j].sum()
             
-            reg_obs_gal = utils.reg_format(self.obs_gal)
+            for j in range(psf.shape[0]):
+                if psf[j].sum() != 0:
+                    psf[j] /= psf[j].sum()
+            
             est_gal, _, _ = sf_deconvolve.run(reg_obs_gal, psf, **opts)
-                
+
+            for j in range(est_gal.shape[0]):
+                if est_gal[j].sum() != 0:
+                    est_gal[j] /= est_gal[j].sum()
+
             " ============================== Sources estimation =============================== "
             # update gradient instance with new weights...
             source_grad.update(weights_stars, weights_gal, est_gal)
@@ -434,7 +468,6 @@ window of 7.5 pixels.''')
             
             #TODO: replace line below with Fred's component selection (to be extracted from `low_rank_global_src_est_comb`)
             ind_select = range(comp.shape[2])
-
 
             " ============================== Weights estimation =============================== "        
             if k < self.nb_iter-1: 
@@ -493,11 +526,16 @@ window of 7.5 pixels.''')
         PSFs = self._transform(weights_gal)
         psf = utils.reg_format(PSFs)           
         for j in range(psf.shape[0]):
-            psf[j] /= psf[j].sum()
+            if est_gal[j].sum() != 0:
+                psf[j] /= psf[j].sum()
             
         reg_obs_gal = utils.reg_format(self.obs_gal)
         est_gal, _, _ = sf_deconvolve.run(reg_obs_gal, psf, **opts)
-            
+        
+        for j in range(est_gal.shape[0]):
+            if est_gal[j].sum() != 0:
+                est_gal[j] /= est_gal[j].sum()
+ 
         # Set up source updates, starting with the gradient
         source_grad = grads.SourceGrad(self.obs_data, weights_stars, weights_gal, est_gal, self.flux, self.sigs, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact, self.starlet_filters)
 
@@ -525,11 +563,15 @@ window of 7.5 pixels.''')
             PSFs = self._transform(weights_gal)
             psf = utils.reg_format(PSFs)
             for j in range(psf.shape[0]):
-                psf[j] /= psf[j].sum()
+                if est_gal[j].sum() != 0:
+                    psf[j] /= psf[j].sum()
             
             reg_obs_gal = utils.reg_format(self.obs_gal)
             est_gal, _, _ = sf_deconvolve.run(reg_obs_gal, psf, **opts)
-                
+            
+            for j in range(est_gal.shape[0]):
+                if est_gal[j].sum() != 0:
+                    est_gal[j] /= est_gal[j].sum()            
             " ============================== Sources estimation =============================== "
             # update gradient instance with new weights...
             source_grad.update(weights_stars, weights_gal, est_gal)
