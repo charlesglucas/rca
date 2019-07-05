@@ -148,7 +148,6 @@ class SourceGrad(GradParent, PowerMethod):
         self.ker_rot  = ker_rot
         self.D = D
         self.filters = filters
-        self.cost_val = []
         # initialize Power Method to compute spectral radius
         hr_shape = np.array(obs_data.shape[:2])*D
         PowerMethod.__init__(self, self.trans_op_op, 
@@ -181,21 +180,14 @@ class SourceGrad(GradParent, PowerMethod):
         normfacs = self.flux / (np.median(self.flux)*self.sig)
         S = utils.rca_format(np.array([filter_convolve(transf_Sj, self.filters, filter_rot=True)
                              for transf_Sj in transf_S]))
-        PSFs = S.dot(self.A_gal)
-        reg_obs_gal = np.copy(self.obs_data[:,:,self.A_stars.shape[1]:])
-        reg_obs_gal = utils.reg_format(reg_obs_gal)
-        ntest = reg_obs_gal.shape[0]
+        SA_gal = S.dot(self.A_gal)
+        nb_gal,nb_stars = self.A_gal.shape[1], self.A_stars.shape[1]
 
-        cents = []
-        for galaxy in reg_obs_gal:
-            cents += [utils.CentroidEstimator(galaxy)]
-        shifts = np.array([ce.return_shifts() for ce in cents])
-
-        shift_kernels, _ = utils.shift_ker_stack(shifts,self.D)
-        SA = np.array([fftconvolve(PSFs[:,:,j],shift_kernels[:,:,j],mode='same') for j in range(ntest)])
-
+        #SA_gal = np.array([fftconvolve(SA_gal[:,:,j],shift_ker[:,:,nb_stars+j],mode='same') for j in range(nb_gal)])
+        SA_gal = np.utils.reg_format(SA_gal)
+        
         dec_rec_stars = np.array([nf * degradation_op(S.dot(A_stars_i),shift_ker,self.D) for nf,A_stars_i,shift_ker in zip(normfacs, self.A_stars.T, utils.reg_format(self.ker))])
-        dec_rec_gal = convolve_stack(utils.decim(SA,self.D,av_en=0), self.X_gal, method='astropy')
+        dec_rec_gal = convolve_stack(utils.decim(SA_gal,self.D,av_en=0), self.X_gal, method='astropy')
         dec_rec = np.concatenate((dec_rec_stars, dec_rec_gal), axis=0)
         self._current_rec = utils.rca_format(dec_rec)
         return self._current_rec
@@ -224,17 +216,10 @@ class SourceGrad(GradParent, PowerMethod):
         upsamp_x_gal = np.array([utils.transpose_decim(x_i,self.D) for x_i in x[upsamp_x_stars.shape[0]:]])
         
         x_gal = upsamp_x_gal
-        reg_obs_gal = np.copy(self.obs_data[:,:,self.A_stars.shape[1]:])
-        reg_obs_gal = utils.reg_format(reg_obs_gal)
-        ntest = reg_obs_gal.shape[0]
+        nb_gal,nb_stars = self.A_gal.shape[1], self.A_stars.shape[1]
 
-        cents = []
-        for galaxy in reg_obs_gal:
-            cents += [utils.CentroidEstimator(galaxy)]
-        shifts = np.array([ce.return_shifts() for ce in cents])
-
-        shift_kernels, shift_kernels_rot = utils.shift_ker_stack(shifts,self.D)
-        SA = np.array([fftconvolve(x_gal[j],shift_kernels_rot[:,:,j],mode='same') for j in range(ntest)])
+        #x_gal = np.array([fftconvolve(x_gal[j],shift_ker_rot[:,:,nb_stars+j],mode='same') for j in range(nb_gal)])
+        x_gal = np.utils.reg_format(x_gal)
         
         x, upsamp_x_stars = utils.rca_format(x), utils.rca_format(upsamp_x_stars)
         xA = upsamp_x_stars.dot(self.A_stars.T)
@@ -242,14 +227,6 @@ class SourceGrad(GradParent, PowerMethod):
         xX = utils.rca_format(xX)
         xXA_gal = xX.dot(self.A_gal.T)
         xXA = xA + xXA_gal
-        '''
-        self._plot_func(SA[0], title='x_gal')
-        self._plot_func(upsamp_x_stars[:,:,0], title='upsamp_x_stars')
-        self._plot_func(xX[:,:,0], title='xX')
-        self._plot_func(xA[:,:,0], title='xA')
-        self._plot_func(xXA_gal[:,:,0], title='xXA_gal')
-        self._plot_func(xXA[:,:,0], title='xXA')
-        '''
         return utils.apply_transform(xXA,self.filters)
     
     def cost(self, x, y=None, verbose=False):
@@ -259,13 +236,6 @@ class SourceGrad(GradParent, PowerMethod):
         if isinstance(self._current_rec, type(None)):
             self._current_rec = self.MX(x)
         cost_val = 0.5 * np.linalg.norm(self._current_rec - self.obs_data) ** 2
-        print cost_val
-        '''
-        self.cost_val.append(cost_val)
-        x = range(len(self.cost_val))
-        plt.plot(x, self.cost_val)
-        plt.show()
-        '''
         return cost_val
 
     def get_grad(self, x):

@@ -234,6 +234,18 @@ def shift_ker_stack(shifts,upfact,lanc_rad=4):
 
     return shift_ker_stack,shift_ker_stack_adj
         
+    def thin_plate_matrix(pos1, pos2):
+        nb1, nb2 = pos1.shape[0], pos2.shape[0]
+        phi = np.zeros((nb1, nb2))
+        for k in range(nb1):
+            for l in range(nb2):
+                r2 = sum((pos1[k]-pos2[l])**2)
+                if r2 != 0:
+                    phi[l,k] = r2 * np.log(r2)/2.
+                else:
+                    phi[l,k] = 0
+        return phi
+    
 def gen_Pea(distances, e, a):
     """ Computes :math:`P_{e,a}` matrix for given ``e``, ``a`` couple. See Equations (16-17)
     in RCA paper.
