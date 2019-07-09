@@ -6,7 +6,7 @@ from modopt.opt.cost import costObj
 from modopt.opt.proximity import Positivity
 import modopt.opt.algorithms as optimalg
 import proxs as rca_prox
-import grads
+import grads, grads3
 from modopt.opt.reweight import cwbReweight
 from scipy.interpolate import Rbf
 import sf_deconvolve
@@ -136,7 +136,7 @@ class RCA(object):
         self.shap_gal = self.obs_gal.shape
         self.obs_data = np.concatenate((self.obs_stars, self.obs_gal), axis=2)
         self.shap = self.obs_data.shape
-        self.im_hr_shape = (self.upfact*self.shap[0],self.upfact*self.shap[1],self.shap[2])
+        self.im_hr_shape = (self.upfact*self.shap[0],self.upfact*self.shap[1],self.shap_stars[2])
         self.stars_pos = stars_pos
         self.gal_pos = gal_pos
         
@@ -293,11 +293,11 @@ window of 7.5 pixels.''')
         self.sig_min = np.min(self.sigs)
         # intra-pixel shifts
         if self.shifts is None:
-            thresh_data = np.copy(self.obs_data)
+            thresh_data = np.copy(self.obs_stars)
             cents = []
-            for i in range(self.shap[2]):
+            for i in range(self.shap_stars[2]):
                 # don't allow thresholding to be over 80% of maximum observed pixel
-                nsig_shifts = min(self.ksig_init,0.8*self.obs_data[:,:,i].max()/self.sigs[i])
+                nsig_shifts = min(self.ksig_init,0.8*self.obs_stars[:,:,i].max()/self.sigs[i])
                 thresh_data[:,:,i] = utils.HardThresholding(thresh_data[:,:,i], nsig_shifts*self.sigs[i])
                 cents += [utils.CentroidEstimator(thresh_data[:,:,i], sig=self.psf_size)]
             self.shifts = np.array([ce.return_shifts() for ce in cents])
@@ -309,7 +309,7 @@ window of 7.5 pixels.''')
         self.flux_ref = np.median(self.flux)
         # Normalize noise levels observed data
         self.sigs /= self.sig_min
-        self.sigs_stars = self.sigs[:self.obs_stars.shape[2]]
+        self.sigs_stars = self.sigs[:self.shap_stars[2]]
         self.obs_data /= self.sigs.reshape(1,1,-1)
         self.obs_stars = self.obs_data[:,:,:self.shap_stars[2]]
         self.obs_gal = self.obs_data[:,:,self.shap_stars[2]:]
@@ -352,8 +352,7 @@ window of 7.5 pixels.''')
         
         nb_iter_RCA = 0 # 0 for test
         
-        #galaxies_truth = np.load('/Users/charles/Documents/StartingKit/Experiment/results/galaxies_truth.npy')
-        #est_gal = galaxies_truth
+        galaxies_truth = np.load('/Users/charles/Documents/StartingKit/Experiment/results/galaxies_truth.npy')
         
         #### Source updates set-up ####
         # Initialize galaxies weights
@@ -366,7 +365,7 @@ window of 7.5 pixels.''')
         rho_phi = np.sqrt(np.sum(np.sum(np.abs(self.starlet_filters),axis=(1,2))**2))
         
         # Initialize estimated galaxies
-        est_gal = np.zeros(self.shap_gal[2])
+        est_gal = utils.reg_format(np.zeros(self.shap_gal))
 
         # Set up source updates, starting with the gradient
         source_grad = grads.SourceGrad(self.obs_data, weights_stars, weights_gal, est_gal, self.flux, self.sigs_stars, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact, self.starlet_filters)
@@ -402,13 +401,12 @@ window of 7.5 pixels.''')
             if 1==1:
                 psf = comp.dot(weights_gal)  
                 psf = utils.reg_format(psf)
-                #psf = np.array([fftconvolve(psf[:,:,j],self.shift_ker_stack[:,:,nb_stars+j],mode='same') for j in range(nb_gal)])
                 
                 psf_norm = np.sum(psf,(1,2))
                 psf /= psf_norm.reshape(-1,1,1)
-                        
-                #est_gal = galaxies_truth        
-                est_gal, _, _ = sf_deconvolve.run(reg_obs_gal, psf, **opts)            
+                    
+                est_gal = galaxies_truth        
+                #est_gal, _, _ = sf_deconvolve.run(reg_obs_gal, psf, **opts)            
                 est_gal /= psf_norm.reshape(-1,1,1)
                                  
             " ============================== Sources estimation =============================== "
@@ -453,13 +451,11 @@ window of 7.5 pixels.''')
                                     for transf_compj in transf_comp]))
             
             #TODO: replace line below with Fred's component selection (to be extracted from `low_rank_global_src_est_comb`)
-            ind_select = range(comp.shap_stars[2])
+            ind_select = range(comp.shape[2])
 
             " ============================== Galaxies estimation =============================== "
             if k >= nb_iter_RCA-1 and k < self.nb_iter+nb_iter_RCA-1:
-                psf = comp.dot(weights_gal)  
-                psf = utils.reg_format(psf)
-                #psf = np.array([fftconvolve(psf[:,:,j],self.shift_ker_stack[:,:,nb_stars+j],mode='same') for j in range(nb_gal)])
+                psf = utils.reg_format(comp.dot(weights_gal))
                 
                 psf_norm = np.sum(psf,(1,2))
                 psf /= psf_norm.reshape(-1,1,1)
@@ -492,15 +488,16 @@ window of 7.5 pixels.''')
         self.S = comp
         self.alpha = alpha
         source_grad.MX(transf_comp)
-        self.current_rec = source_grad._current_rec
-
+        self.current_rec = source_grad._current_rec                 
+        
     def _fit2(self, n_neighbors=15, rbf_function='thin_plate', shifts=None, flux=None,
                      upfact=None, rca_format=False):
         #weights_stars = self.weights_stars
+        #comp = self.S
+        #alpha = self.alpha
         weights_stars = np.load('/Users/charles/Documents/StartingKit/Experiment/A.npy')
         comp = np.load('/Users/charles/Documents/StartingKit/Experiment/S.npy')
-        #comp = self.S
-        alpha = self.alpha
+        alpha = np.load('/Users/charles/Documents/StartingKit/Experiment/alpha.npy')
         
         reg_obs_gal = utils.reg_format(self.obs_gal)
         opts = vars(sf_deconvolve.get_opts(['-i', 'results/galaxies.npy'
@@ -510,15 +507,15 @@ window of 7.5 pixels.''')
         
         nb_iter_RCA = 0 # 0 for test
         
-        #galaxies_truth = np.load('/Users/charles/Documents/StartingKit/Experiment/results/galaxies_truth.npy')
-        #est_gal = galaxies_truth
+        galaxies_truth = np.load('/Users/charles/Documents/StartingKit/Experiment/results/galaxies_truth.npy')
         
         #### Source updates set-up ####
         # interpolation matrix 
         phi_g = utils.thin_plate_matrix(self.gal_pos, self.stars_pos)
         phi_s = utils.thin_plate_matrix(self.stars_pos, self.stars_pos)
         phi_s_inv = np.linalg.inv(phi_s)
-        M = phi_g.dot(phi_s_inv)       
+        M = phi_g.dot(phi_s_inv)  
+        weights_gal = weights_stars.dot(M.T)
         
         # Initialize dual variable and compute Starlet filters for Condat source updates 
         dual_var = np.zeros((self.im_hr_shape))
@@ -526,10 +523,10 @@ window of 7.5 pixels.''')
         rho_phi = np.sqrt(np.sum(np.sum(np.abs(self.starlet_filters),axis=(1,2))**2))
         
         # Initialize estimated galaxies
-        est_gal = np.zeros(self.shap_gal[2])
+        est_gal = utils.reg_format(np.zeros(self.shap_gal))
 
         # Set up source updates, starting with the gradient
-        source_grad = grads2.SourceGrad(self.obs_data, weights_stars, M, est_gal, self.flux, self.sigs_stars, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact, self.starlet_filters)
+        source_grad = grads3.SourceGrad(self.obs_data, weights_stars, M, est_gal, self.flux, self.sigs_stars, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact, self.starlet_filters)
         
         # sparsity in Starlet domain prox (this is actually assuming synthesis form)
         sparsity_prox = rca_prox.StarletThreshold(0) # we'll update to the actual thresholds later
@@ -538,7 +535,7 @@ window of 7.5 pixels.''')
         lin_recombine = rca_prox.LinRecombine(weights_stars, self.starlet_filters)
 
         #### Weight updates set-up ####                
-        weight_grad = grads2.CoeffGrad(self.obs_stars, comp, self.VT, M, self.flux, self.sigs_stars, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact)
+        weight_grad = grads3.CoeffGrad(self.obs_data, comp, self.VT, M, est_gal, self.flux, self.sigs_stars, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact)
         
         # cost function
         weight_cost = costObj([weight_grad], verbose=self.modopt_verb) 
@@ -548,16 +545,16 @@ window of 7.5 pixels.''')
         iter_func = lambda x: np.floor(np.sqrt(x))+1
         coeff_prox = rca_prox.KThreshold(iter_func)
 
-        for k in range(self.nb_iter+nb_iter_RCA):
-                    
+        for k in range(self.nb_iter+nb_iter_RCA):   
+            weights_gal = weights_stars.dot(M.T)
             " ============================== Galaxies estimation for test ============================= "
             if 1==1:
                 psf = comp.dot(weights_gal)  
                 psf = utils.reg_format(psf)
-                #psf = np.array([fftconvolve(psf[:,:,j],self.shift_ker_stack[:,:,nb_stars+j],mode='same') for j in range(nb_gal)])
-                psf_norm = np.sum(psf,(1,2))
                 
-                psf /= psf_norm.reshape(-1,1,1)                       
+                psf_norm = np.sum(psf,(1,2))
+                psf /= psf_norm.reshape(-1,1,1)
+                    
                 #est_gal = galaxies_truth        
                 est_gal, _, _ = sf_deconvolve.run(reg_obs_gal, psf, **opts)            
                 est_gal /= psf_norm.reshape(-1,1,1)
@@ -604,24 +601,23 @@ window of 7.5 pixels.''')
                                     for transf_compj in transf_comp]))
             
             #TODO: replace line below with Fred's component selection (to be extracted from `low_rank_global_src_est_comb`)
-            ind_select = range(comp.shap_stars[2])
+            ind_select = range(comp.shape[2])
 
             " ============================== Galaxies estimation =============================== "
-            if k >= nb_iter_RCA-1 and k < self.nb_iter+nb_iter_RCA-1:
-                psf = comp.dot(weights_gal)  
-                psf = utils.reg_format(psf)
-                #psf = np.array([fftconvolve(psf[:,:,j],self.shift_ker_stack[:,:,nb_stars+j],mode='same') for j in range(nb_gal)]) 
-                psf_norm = np.sum(psf,(1,2))
+            if 1==0:#k >= nb_iter_RCA-1 and k < self.nb_iter+nb_iter_RCA-1:
+                psf = utils.reg_format(comp.dot(weights_gal))
                 
-                psf /= psf_norm.reshape(-1,1,1)                        
+                psf_norm = np.sum(psf,(1,2))
+                psf /= psf_norm.reshape(-1,1,1)
+                        
                 #est_gal = galaxies_truth        
                 est_gal, _, _ = sf_deconvolve.run(reg_obs_gal, psf, **opts)            
                 est_gal /= psf_norm.reshape(-1,1,1)
                        
             " ============================== Weights estimation =============================== "        
-            if k < self.nb_iter+nb_iter_RCA-1: 
+            if 1==1:#k < self.nb_iter+nb_iter_RCA-1: 
                 # update sources and reset iteration counter for K-thresholding
-                weight_grad.update_S(comp)
+                weight_grad.update(comp, est_gal)
                 coeff_prox.reset_iter()
                 weight_optim = optimalg.ForwardBackward(alpha, weight_grad, coeff_prox, cost=weight_cost,
                                                 beta_param=weight_grad.inv_spec_rad, auto_iterate=False)
@@ -642,7 +638,7 @@ window of 7.5 pixels.''')
         self.S = comp
         self.alpha = alpha
         source_grad.MX(transf_comp)
-        self.current_rec = source_grad._current_rec        
+        self.current_rec = source_grad._current_rec            
         
     def _transform(self, weights):
         return self.S.dot(weights)

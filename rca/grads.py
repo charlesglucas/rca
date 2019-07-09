@@ -5,8 +5,6 @@ from modopt.signal.wavelet import filter_convolve
 import utils
 from scipy.signal import fftconvolve
 from modopt.math.convolve import convolve, convolve_stack
-import matplotlib.pyplot as plt
-from scipy import optimize
 
 def degradation_op(X, shift_ker, D):
     """ Shift and decimate fine-grid image."""
@@ -179,32 +177,14 @@ class SourceGrad(GradParent, PowerMethod):
         """
         normfacs = self.flux / (np.median(self.flux)*self.sig)
         S = utils.rca_format(np.array([filter_convolve(transf_Sj, self.filters, filter_rot=True)
-                             for transf_Sj in transf_S]))
-        SA_gal = S.dot(self.A_gal)
-        nb_gal,nb_stars = self.A_gal.shape[1], self.A_stars.shape[1]
-
-        #SA_gal = np.array([fftconvolve(SA_gal[:,:,j],shift_ker[:,:,nb_stars+j],mode='same') for j in range(nb_gal)])
-        SA_gal = np.utils.reg_format(SA_gal)
+                             for transf_Sj in transf_S]))     
         
-        dec_rec_stars = np.array([nf * degradation_op(S.dot(A_stars_i),shift_ker,self.D) for nf,A_stars_i,shift_ker in zip(normfacs, self.A_stars.T, utils.reg_format(self.ker))])
+        dec_rec_stars = np.array([nf * degradation_op(S.dot(A_stars_i),shift_ker,self.D) for nf,A_stars_i,shift_ker in zip(normfacs, self.A_stars.T, utils.reg_format(self.ker))])       
+        SA_gal = utils.reg_format(S.dot(self.A_gal))
         dec_rec_gal = convolve_stack(utils.decim(SA_gal,self.D,av_en=0), self.X_gal, method='astropy')
         dec_rec = np.concatenate((dec_rec_stars, dec_rec_gal), axis=0)
         self._current_rec = utils.rca_format(dec_rec)
         return self._current_rec
-        
-    def _plot_func(self, im, wind=False, cmap='gist_stern', title=''):
-        if not wind:
-            plt.imshow(im, cmap=cmap, interpolation='Nearest')
-        else:
-            vmin, vmax = wind
-            plt.imshow(im, cmap=cmap, interpolation='Nearest', vmin=vmin, vmax=vmax)
-        if title:
-            plt.title(title)
-        plt.colorbar()
-        plt.xticks([])
-        plt.yticks([])
-        plt.show()
-        plt.close()
 
     def MtX(self, x):
         """Adjoint to degradation operator :func:`MX`.
@@ -212,21 +192,13 @@ class SourceGrad(GradParent, PowerMethod):
         """
         normfacs = self.flux / (np.median(self.flux)*self.sig)
         x = utils.reg_format(x)
-        upsamp_x_stars = np.array([nf * adjoint_degradation_op(x_i,shift_ker,self.D) for nf,x_i,shift_ker in zip(normfacs, x, utils.reg_format(self.ker_rot))])
-        upsamp_x_gal = np.array([utils.transpose_decim(x_i,self.D) for x_i in x[upsamp_x_stars.shape[0]:]])
+        x_stars = np.array([nf * adjoint_degradation_op(x_i,shift_ker,self.D) for nf,x_i,shift_ker in zip(normfacs, x, utils.reg_format(self.ker_rot))])
+        x_gal = np.array([utils.transpose_decim(x_i,self.D) for x_i in x[x_stars.shape[0]:]])
         
-        x_gal = upsamp_x_gal
-        nb_gal,nb_stars = self.A_gal.shape[1], self.A_stars.shape[1]
-
-        #x_gal = np.array([fftconvolve(x_gal[j],shift_ker_rot[:,:,nb_stars+j],mode='same') for j in range(nb_gal)])
-        x_gal = np.utils.reg_format(x_gal)
-        
-        x, upsamp_x_stars = utils.rca_format(x), utils.rca_format(upsamp_x_stars)
-        xA = upsamp_x_stars.dot(self.A_stars.T)
-        xX = convolve_stack(SA, self.X_gal, rot_kernel=True, method='astropy')
-        xX = utils.rca_format(xX)
-        xXA_gal = xX.dot(self.A_gal.T)
-        xXA = xA + xXA_gal
+        x, x_stars = utils.rca_format(x), utils.rca_format(x_stars)
+        xA = x_stars.dot(self.A_stars.T)
+        xX = utils.rca_format(convolve_stack(x_gal, self.X_gal, rot_kernel=True, method='astropy'))
+        xXA = xA + xX.dot(self.A_gal.T)
         return utils.apply_transform(xXA,self.filters)
     
     def cost(self, x, y=None, verbose=False):
@@ -236,6 +208,7 @@ class SourceGrad(GradParent, PowerMethod):
         if isinstance(self._current_rec, type(None)):
             self._current_rec = self.MX(x)
         cost_val = 0.5 * np.linalg.norm(self._current_rec - self.obs_data) ** 2
+        print cost_val
         return cost_val
 
     def get_grad(self, x):
