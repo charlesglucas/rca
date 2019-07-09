@@ -245,7 +245,14 @@ def thin_plate_matrix(pos1, pos2):
             else:
                 phi[k,l] = 0
     return phi
-    
+
+def thin_plate_interpolation(pos1, pos2):
+    phi_g = thin_plate_matrix(pos1, pos2)
+    phi_s = thin_plate_matrix(pos2, pos2)
+    phi_s_inv = np.linalg.inv(phi_s)
+    M = phi_g.dot(phi_s_inv) 
+    return M
+   
 def gen_Pea(distances, e, a):
     """ Computes :math:`P_{e,a}` matrix for given ``e``, ``a`` couple. See Equations (16-17)
     in RCA paper.
