@@ -6,7 +6,7 @@ from modopt.opt.cost import costObj
 from modopt.opt.proximity import Positivity
 import modopt.opt.algorithms as optimalg
 import proxs as rca_prox
-import grads, grads3
+import grads
 from modopt.opt.reweight import cwbReweight
 from scipy.interpolate import Rbf
 import sf_deconvolve
@@ -76,7 +76,7 @@ class RCA(object):
         
     def fit(self, obs_stars, obs_gal, stars_pos, gal_pos, S=None, VT=None, alpha=None,
             shifts=None, sigs=None, psf_size=None, psf_size_type='fwhm',
-            flux=None, nb_iter=1, nb_iter_RCA=2, nb_subiter_S=200, nb_reweight=0, 
+            flux=None, nb_iter=2, nb_subiter_S=200, nb_reweight=0, 
             nb_subiter_weights=None, n_eigenvects=5, graph_kwargs={}):
         """ Fits RCA to observed star field.
         
@@ -109,11 +109,7 @@ class RCA(object):
             Flux levels. Default is ``None``; will be estimated from data if not provided.
         nb_iter: int
             Number of overall iterations (i.e. of alternations) after initialization with RCA. Note the weights do not get updated the last time around, so they actually get ``nb_iter-1`` updates.
-            Default is 2.
-        nb_iter_RCA: int
-            Number of overall iterations (i.e. of alternations) of RCA for initialization. Note the weights do not
-            get updated the last time around, so they actually get ``nb_iter-1`` updates.
-            Default is 2.            
+            Default is 2.          
         nb_subiter_S: int
             Maximum number of iterations for :math:`S` updates. If ModOpt's optimizers achieve 
             internal convergence, that number may (and often is) not reached. Default is
@@ -155,7 +151,6 @@ class RCA(object):
         self.sigs = sigs
         self.flux = flux
         self.nb_iter = nb_iter
-        self.nb_iter_RCA = nb_iter_RCA
         self.nb_subiter_S = nb_subiter_S
         if nb_subiter_weights is None:
             nb_subiter_weights = 2*nb_subiter_S
@@ -357,7 +352,7 @@ window of 7.5 pixels.''')
         iter_func = lambda x: np.floor(np.sqrt(x))+1
         coeff_prox = rca_prox.KThreshold(iter_func)
 
-        for k in range(self.nb_iter+self.nb_iter_RCA):                    
+        for k in range(self.nb_iter):                    
             " ============================== Sources estimation =============================== "
             # update gradient instance with new weights...
             source_grad.update(weights_stars, est_gal)
@@ -402,8 +397,8 @@ window of 7.5 pixels.''')
             #TODO: replace line below with Fred's component selection (to be extracted from `low_rank_global_src_est_comb`)
             ind_select = range(comp.shape[2])
 
+            if k < self.nb_iter-1:
             " ============================== Galaxies estimation =============================== "
-            if k >= self.nb_iter_RCA-1 and k < self.nb_iter+self.nb_iter_RCA-1:
                 psf = utils.reg_format(comp.dot(weights_stars).dot(M.T))                
                 psf_norm = np.sum(psf,(1,2))
                 psf /= psf_norm.reshape(-1,1,1)                             
@@ -411,7 +406,6 @@ window of 7.5 pixels.''')
                 est_gal /= psf_norm.reshape(-1,1,1)
                        
             " ============================== Weights estimation =============================== "        
-            if k < self.nb_iter+self.nb_iter_RCA-1: 
                 # update sources and reset iteration counter for K-thresholding
                 weight_grad.update(comp, est_gal)
                 coeff_prox.reset_iter()
