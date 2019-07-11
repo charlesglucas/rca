@@ -1,10 +1,12 @@
+from __future__ import absolute_import, print_function
 import numpy as np
+from scipy.signal import fftconvolve
 from modopt.opt.gradient import GradParent, GradBasic
 from modopt.math.matrix import PowerMethod
 from modopt.signal.wavelet import filter_convolve
-import utils
 from scipy.signal import fftconvolve
 from modopt.math.convolve import convolve, convolve_stack
+import rca.utils as utils
 
 def degradation_op(X, shift_ker, D):
     """ Shift and decimate fine-grid image."""
@@ -23,6 +25,8 @@ class CoeffGrad(GradParent, PowerMethod):
     ----------
     data: np.ndarray
         Observed data.
+    weights: np.ndarray
+        Corresponding pixel-wise weights.
     S: np.ndarray
         Current eigenPSFs :math:`S`.
     VT: np.ndarray
@@ -80,7 +84,7 @@ class CoeffGrad(GradParent, PowerMethod):
         Parameters
         ----------
         alpha: np.ndarray
-            Current weights (after factorization by :math:`V^\\top`).
+            Current coefficients (after factorization by :math:`V^\\top`).
         """
         nb_gal, nb_stars = self.M.shape
         A_stars = alpha.dot(self.VT) 
@@ -114,15 +118,14 @@ class CoeffGrad(GradParent, PowerMethod):
         if isinstance(self._current_rec, type(None)):
             self._current_rec = self.MX(x)
         cost_val = 0.5 * np.linalg.norm(self._current_rec - self.obs_data) ** 2
-        print cost_val
         return cost_val
                 
     def get_grad(self, x):
         """Compute current iteration's gradient.
         """
         self.grad = self.MtX(self.MX(x) - self.obs_data)           
+        self.grad = self.MtX(self.obs_weights**2 * (self.MX(x) - self.obs_data))
       
-
 class SourceGrad(GradParent, PowerMethod):
     """Gradient class for the eigenPSF update.
     
@@ -130,6 +133,8 @@ class SourceGrad(GradParent, PowerMethod):
     ----------
     data: np.ndarray
         Input data array, a array of 2D observed images (i.e. with noise).
+    weights: np.ndarray
+        Corresponding pixel-wise weights.
     A: np.ndarray
         Current estimation of corresponding coefficients.
     flux: np.ndarray
@@ -149,6 +154,8 @@ class SourceGrad(GradParent, PowerMethod):
     def __init__(self, obs_data, A_stars, M, X_gal, flux, sig, ker, ker_rot, D, filters, data_type='float'):
         self._grad_data_type = data_type
         self.obs_data = obs_data
+        self._grad_data_type = data_type
+        self.obs_data = data
         self.op = self.MX 
         self.trans_op = self.MtX 
         self.A_stars = np.copy(A_stars)
@@ -168,7 +175,7 @@ class SourceGrad(GradParent, PowerMethod):
         self._current_rec = None # stores latest application of self.MX
 
     def update(self, new_A_stars, new_X_gal, update_spectral_radius=True):
-        """Update current weights.
+        """Update current coefficients.
         """
         self.A_stars = new_A_stars
         self.X_gal = new_X_gal

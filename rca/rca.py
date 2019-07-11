@@ -1,16 +1,17 @@
+from __future__ import absolute_import, print_function
 import numpy as np
-import utils
+from scipy.interpolate import Rbf
 from modopt.signal.wavelet import get_mr_filters, filter_convolve
 from scipy.signal import fftconvolve
 from modopt.opt.cost import costObj
 from modopt.opt.proximity import Positivity
-import modopt.opt.algorithms as optimalg
-import proxs as rca_prox
-import grads
 from modopt.opt.reweight import cwbReweight
 from scipy.interpolate import Rbf
 import sf_deconvolve
-import matplotlib.pyplot as plt
+import modopt.opt.algorithms as optimalg
+import rca.proxs as rca_prox
+import rca.grads as grads
+import rca.utils as utils
 
 def quickload(path):
     """ Load pre-fitted RCA model (saved with :func:`RCA.quicksave`).
@@ -20,13 +21,18 @@ def quickload(path):
     path: str
         Path to where the fitted RCA model was saved.
     """
-    RCA_params, fitted_model = np.load(path+'.npy')
+    if path[-4:] != '.npy':
+        path += '.npy'
+    RCA_params, fitted_model = np.load(path, allow_pickle=True)
     loaded_rca = RCA(**RCA_params)
     loaded_rca.stars_pos = fitted_model['stars_pos']
     loaded_rca.gal_pos = fitted_model['gal_pos']
     loaded_rca.weights_stars = fitted_model['weights_stars']
     loaded_rca.S = fitted_model['S']
     loaded_rca.flux_ref = fitted_model['flux_ref']
+    loaded_rca.psf_size = fitted_model['psf_size']
+    loaded_rca.VT = fitted_model['VT']
+    loaded_rca.alpha = fitted_model['alpha']
     loaded_rca.is_fitted = True
     return loaded_rca
 
@@ -43,30 +49,35 @@ class RCA(object):
         Value of :math:`k` for the thresholding in Starlet domain (taken to be 
         :math:`k\sigma`, where :math:`\sigma` is the estimated noise standard deviation.)
     n_scales: int
-        Number of Starlet scales to use for the sparsity constraint. Default is 3.
+        Number of Starlet scales to use for the sparsity constraint. Default is 3. Unused if
+        ``filters`` are provided.
     ksig_init: float
         Similar to ``ksig``, for use when estimating shifts and noise levels, as it might 
         be desirable to have it set higher than ``ksig``. Unused if ``shifts`` are provided 
         when running :func:`RCA.fit`. Default is 5.
-    n_scales_init: int
-        Similar to ``n_scales``, for use when estimating shifts and noise levels, as it might 
-        be sufficient to use fewer scales when initializing. Unused if ``sigs`` are provided
-        when running :func:`RCA.fit`. Default is 2.
+    filters: np.ndarray
+        Optional filters to the transform domain wherein eigenPSFs are assumed to be sparse;
+        convolution by them should amount to applying :math:`\Phi`. Optional; if not provided, the
+        Starlet transform with `n_scales` scales will be used.
     verbose: bool or int
         If True, will only output RCA-specific lines to stdout. If verbose is set to 2,
         will run ModOpt's optimization algorithms in verbose mode. 
         
     """
-    def __init__(self, n_comp, upfact=1, ksig=3, n_scales=3,
-                 ksig_init=5, n_scales_init=2, verbose=2):
+    def __init__(self, n_comp, upfact=1, ksig=3, n_scales=3, ksig_init=5, filters=None, 
+                 verbose=2):
         self.n_comp = n_comp
         self.upfact = upfact
         self.ksig = ksig
         self.ksig_init = ksig_init
         
-        # option strings for mr_transform
-        self.opt_sig_init = ['-t2', '-n{}'.format(n_scales_init)]
-        self.opt = ['-t2', '-n{}'.format(n_scales)]
+        if filters is None:
+            # option strings for mr_transform
+            self.opt = ['-t2', '-n{}'.format(n_scales)]
+            self.default_filters = True
+        else:
+            self.Phi_filters = filters
+            self.default_filters = False
         self.verbose = verbose
         if self.verbose > 1:
             self.modopt_verb = True
@@ -86,6 +97,11 @@ class RCA(object):
             Observed data.
         obs_pos: np.ndarray
             Corresponding positions.
+        obs_weights: np.ndarray
+            Corresponding weights. Can be either one per observed star, or contain pixel-wise values. Masks can be
+            handled via binary weights. Default is None (in which case no weights are applied). Note if fluxes and
+            shifts are not provided, weights will be ignored for their estimation. Noise level estimation only removes 
+            bad pixels (with weight strictly equal to 0) and otherwise ignores weights.
         S: np.ndarray
             First guess (or warm start) eigenPSFs :math:`S`. Default is ``None``.
         VT: np.ndarray
@@ -139,6 +155,18 @@ class RCA(object):
         self.im_hr_shape = (self.upfact*self.shap[0],self.upfact*self.shap[1],self.shap_stars[2])
         self.stars_pos = stars_pos
         self.gal_pos = gal_pos        
+        '''
+        if obs_weights is None:
+            self.obs_weights = np.ones(self.shap) #/ self.shap[2]
+        elif obs_weights.shape == self.shap:
+            self.obs_weights = obs_weights / np.expand_dims(np.sum(obs_weights,axis=2), 2) * self.shap[2]
+        elif obs_weights.shape == (self.shap[2],):
+            self.obs_weights = obs_weights.reshape(1,1,-1) / np.sum(obs_weights) * self.shap[2]
+        else:
+            raise ValueError(
+            'Shape mismatch; weights should be of shape {} (for per-pixel weights) or {} (per-observation)'.format(
+                             self.shap, self.shap[2:]))
+        '''
         if S is None:
             self.S = np.zeros(self.im_hr_shape[:2] + (self.n_comp,))
         else:
@@ -147,7 +175,7 @@ class RCA(object):
         self.alpha = alpha
         self.shifts = shifts
         if shifts is None:
-            self.psf_size = self.set_psf_size(psf_size, psf_size_type)
+            self.psf_size = self._set_psf_size(psf_size, psf_size_type)
         self.sigs = sigs
         self.flux = flux
         self.nb_iter = nb_iter
@@ -160,39 +188,23 @@ class RCA(object):
         self.graph_kwargs = graph_kwargs
             
         if self.verbose:
-            print 'Running basic initialization tasks...'
+            print('Running basic initialization tasks...')
         self._initialize()
         if self.verbose:
-            print '... Done.'
+            print('... Done.')
         if self.VT is None or self.alpha is None:
             if self.verbose:
-                print 'Constructing graph constraint...'
+                print('Constructing graph constraint...')
             self._initialize_graph_constraint()
             if self.verbose:
-                print '... Done.'
+                print('... Done.')
         else:
             self.weights_stars = self.alpha.dot(self.VT)
         self._fit()
         self.is_fitted = True
         return self.S, self.weights_stars
-        
-    def set_psf_size(self, psf_size, psf_size_type):
-        """ Handles different "size" conventions."""
-        if psf_size is not None:
-            if psf_size_type == 'fwhm':
-                return psf_size / (2*np.sqrt(2*np.log(2)))
-            elif psf_size_type == 'R2':
-                return np.sqrt(psf_size / 2)
-            elif psf_size_type == 'sigma':
-                return psf_size
-            else:
-                raise ValueError('psf_size_type should be one of "fwhm", "R2" or "sigma"')
-        else:
-            print('''WARNING: neither shifts nor an estimated PSF size were provided to RCA;
-the shifts will be estimated from the data using the default Gaussian
-window of 7.5 pixels.''')
-            return 7.5
-            
+
+    
     def quicksave(self, path):
         """ Save fitted RCA model for later use. Ideally, you would probably want to store the
         whole RCA instance, though this might mean storing a lot of data you are not likely to
@@ -202,8 +214,7 @@ window of 7.5 pixels.''')
         Parameters
         ----------
         path: str
-            Path to where the fitted RCA model should be saved. The ``.npy`` extension will be
-            added.
+            Path to where the fitted RCA model should be saved.
         """
         if not self.is_fitted:
             raise ValueError('RCA instance has not yet been fitted to observations. Please run\
@@ -211,8 +222,7 @@ window of 7.5 pixels.''')
         RCA_params = {'n_comp': self.n_comp, 'upfact': self.upfact}
         fitted_model = {'stars_pos': self.stars_pos, 'gal_pos': self.gal_pos, 'weights_stars': self.weights_stars, 'S': self.S, 'flux_ref': self.flux_ref}
         np.save(path+'.npy', [RCA_params,fitted_model])
-        
-        
+              
     def estimate_psf(self, test_pos, n_neighbors=15, rbf_function='thin_plate', 
                      apply_degradation=False, shifts=None, flux=None,
                      upfact=None, rca_format=False):
@@ -248,11 +258,24 @@ window of 7.5 pixels.''')
             the fit method.')
         if upfact is None:
             upfact = self.upfact
+
         ntest = test_pos.shape[0]               
         # Interpolate weights
         M = utils.thin_plate_interpolation(test_pos, self.stars_pos)
         test_weights = self.weights_stars.dot(M.T)
        
+        '''
+        ntest = test_pos.shape[0]
+        test_weights = np.empty((self.n_comp, ntest))
+        for j,pos in enumerate(test_pos):
+            # determine neighbors
+            nbs, pos_nbs = utils.return_neighbors(pos, self.obs_pos, self.A.T, n_neighbors)
+            # train RBF and interpolate for each component
+            for i in range(self.n_comp):
+                rbfi = Rbf(pos_nbs[:,0], pos_nbs[:,1], nbs[:,i], function=rbf_function)
+                test_weights[i,j] = rbfi(pos[0], pos[1])
+
+        '''
         PSFs = self._transform(test_weights)
         if apply_degradation:
             shift_kernels, _ = utils.shift_ker_stack(shifts,self.upfact)
@@ -268,16 +291,62 @@ window of 7.5 pixels.''')
             return PSFs
         else:
             return utils.reg_format(PSFs)
+
+    def validation_stars(self, test_stars, test_pos):
+        """ Match PSF model to stars - in flux, shift and pixel sampling - for validation tests.
+        Returns both the matched PSFs' stamps and chi-square value.
         
+        Parameters
+        ----------
+        test_stars: np.ndarray
+            Star stamps to be used for comparison with the PSF model. Should be in "rca" format, 
+            i.e. with axises (n_pixels, n_pixels, n_stars).
+        test_pos: np.ndarray
+            Their corresponding positions.
+        """
+        if not self.is_fitted:
+            raise ValueError('RCA instance has not yet been fitted to observations. Please run\
+            the fit method.')
+        cents = []
+        for star in utils.reg_format(test_stars):
+            cents += [utils.CentroidEstimator(star, sig=self.psf_size)]
+        test_shifts = np.array([ce.return_shifts() for ce in cents])
+        test_fluxes = utils.flux_estimate_stack(test_stars,rad=4)
+        matched_psfs = self.estimate_psf(test_pos, apply_degradation=True, 
+                                    shifts=test_shifts, flux=test_fluxes)
+        return matched_psfs
+        
+    def _set_psf_size(self, psf_size, psf_size_type):
+        """ Handles different "size" conventions."""
+        if psf_size is not None:
+            if psf_size_type == 'fwhm':
+                return psf_size / (2*np.sqrt(2*np.log(2)))
+            elif psf_size_type == 'R2':
+                return np.sqrt(psf_size / 2)
+            elif psf_size_type == 'sigma':
+                return psf_size
+            else:
+                raise ValueError('psf_size_type should be one of "fwhm", "R2" or "sigma"')
+        else:
+            print('''WARNING: neither shifts nor an estimated PSF size were provided to RCA;
+the shifts will be estimated from the data using the default Gaussian
+window of 7.5 pixels.''')
+            return 7.5
+  
     def _initialize(self):
         """ Initialization tasks related to noise levels, shifts and flux. Note it includes
         renormalizing observed data, so needs to be ran even if all three are provided."""
-        self.init_filters = get_mr_filters(self.shap_stars[:2], opt=self.opt_sig_init, coarse=True)
+        if self.default_filters:
+            init_filters = get_mr_filters(self.shap_stars[:2], opt=self.opt, coarse=True)
+        else:
+            init_filters = self.Phi_filters
         # noise levels
         if self.sigs is None:
-            transf_data = rca_prox.apply_transform(self.obs_data, self.init_filters)
-            sigmads = np.array([1.4826*utils.mad(fs[0]) for fs in transf_data])
-            self.sigs = sigmads / np.linalg.norm(self.init_filters[0])
+            transf_data = utils.apply_transform(self.obs_data, init_filters)
+            transf_mask = utils.transform_mask(self.obs_weights, init_filters[0])
+            sigmads = np.array([1.4826*utils.mad(fs[0],w) for fs,w in zip(transf_data,
+                                                      utils.reg_format(transf_mask))])
+            self.sigs = sigmads / np.linalg.norm(init_filters[0])
         else:
             self.sigs = np.copy(self.sigs)
         self.sig_min = np.min(self.sigs)
@@ -287,7 +356,7 @@ window of 7.5 pixels.''')
             cents = []
             for i in range(self.shap_stars[2]):
                 # don't allow thresholding to be over 80% of maximum observed pixel
-                nsig_shifts = min(self.ksig_init,0.8*self.obs_stars[:,:,i].max()/self.sigs[i])
+                nsig_shifts = min(self.ksig_init, 0.8*self.obs_stars[:,:,i].max()/self.sigs[i])
                 thresh_data[:,:,i] = utils.HardThresholding(thresh_data[:,:,i], nsig_shifts*self.sigs[i])
                 cents += [utils.CentroidEstimator(thresh_data[:,:,i], sig=self.psf_size)]
             self.shifts = np.array([ce.return_shifts() for ce in cents])
@@ -323,9 +392,11 @@ window of 7.5 pixels.''')
         
         # Initialize dual variable and compute Starlet filters for Condat source updates 
         dual_var = np.zeros((self.im_hr_shape))
-        self.starlet_filters = get_mr_filters(self.im_hr_shape[:2], opt=self.opt, coarse=True)
-        rho_phi = np.sqrt(np.sum(np.sum(np.abs(self.starlet_filters),axis=(1,2))**2))
+        if self.default_filters:
+            self.Phi_filters = get_mr_filters(self.im_hr_shape[:2], opt=self.opt, coarse=True)
+        rho_phi = np.sqrt(np.sum(np.sum(np.abs(self.Phi_filters),axis=(1,2))**2))
         
+
         # options for sf_deconvolve
         opts = vars(sf_deconvolve.get_opts(['-i', '', '-p', '','-o', '','-m', 'sparse', '--no_plots']))
         
@@ -333,13 +404,13 @@ window of 7.5 pixels.''')
         est_gal = utils.reg_format(np.zeros(self.shap_gal))
 
         # Set up source updates, starting with the gradient
-        source_grad = grads.SourceGrad(self.obs_data, weights_stars, M, est_gal, self.flux, self.sigs_stars, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact, self.starlet_filters)
+        source_grad = grads.SourceGrad(self.obs_data, weights_stars, M, est_gal, self.flux, self.sigs_stars, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact, self.Phi_filters)
         
         # sparsity in Starlet domain prox (this is actually assuming synthesis form)
         sparsity_prox = rca_prox.StarletThreshold(0) # we'll update to the actual thresholds later
 
         # and the linear recombination for the positivity constraint
-        lin_recombine = rca_prox.LinRecombine(weights_stars, self.starlet_filters)
+        lin_recombine = rca_prox.LinRecombine(weights_stars, self.Phi_filters)
 
         #### Weight updates set-up ####                
         weight_grad = grads.CoeffGrad(self.obs_data, comp, self.VT, M, est_gal, self.flux, self.sigs_stars, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact)
@@ -354,6 +425,7 @@ window of 7.5 pixels.''')
 
         for k in range(self.nb_iter):                    
             " ============================== Sources estimation =============================== "
+            #### Eigenpsf update ####
             # update gradient instance with new weights...
             source_grad.update(weights_stars, est_gal)
             
@@ -362,21 +434,20 @@ window of 7.5 pixels.''')
             
             # ... set optimization parameters...
             beta = source_grad.spec_rad + rho_phi
-            #beta = 0.6563937030792308 + rho_phi
             tau = 1./beta
             sigma = 1./lin_recombine.norm * beta/2
 
             # ... update sparsity prox thresholds...
             thresh = utils.reg_format(utils.acc_sig_maps(self.shap_stars,self.shift_ker_stack_adj,self.sigs_stars,
                                                        self.flux,self.flux_ref,self.upfact,weights_stars,
-                                                        sig_data=np.ones((self.shap_stars[2],))*self.sig_min))
-            thresholds = self.ksig*np.sqrt(np.array([filter_convolve(Sigma_k**2,self.starlet_filters**2) 
+                                                   sig_data=np.ones((self.shap_stars[2],))*self.sig_min))
+            thresholds = self.ksig*np.sqrt(np.array([filter_convolve(Sigma_k**2,self.Phi_filters**2) 
                                               for Sigma_k in thresh]))
 
             sparsity_prox.update_threshold(tau*thresholds)
             
             # and run source update:
-            transf_comp = rca_prox.apply_transform(comp, self.starlet_filters)
+            transf_comp = utils.apply_transform(comp, self.Phi_filters)
             if self.nb_reweight:
                 reweighter = cwbReweight(thresholds)
                 for _ in range(self.nb_reweight):
@@ -391,7 +462,7 @@ window of 7.5 pixels.''')
                                                Positivity(), linear = lin_recombine, cost=source_cost,
                                                max_iter=self.nb_subiter_S, tau=tau, sigma=sigma)
                 transf_comp = source_optim.x_final
-            comp = utils.rca_format(np.array([filter_convolve(transf_compj, self.starlet_filters, True)
+            comp = utils.rca_format(np.array([filter_convolve(transf_compj, self.Phi_filters, True)
                                     for transf_compj in transf_comp]))
             
             #TODO: replace line below with Fred's component selection (to be extracted from `low_rank_global_src_est_comb`)
@@ -406,6 +477,7 @@ window of 7.5 pixels.''')
                 est_gal /= psf_norm.reshape(-1,1,1)
                        
             " ============================== Weights estimation =============================== "        
+                #### Weight update ####
                 # update sources and reset iteration counter for K-thresholding
                 weight_grad.update(comp, est_gal)
                 coeff_prox.reset_iter()
