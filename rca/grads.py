@@ -203,7 +203,7 @@ class SourceGrad(GradParent, PowerMethod):
         dec_rec = np.concatenate((dec_rec_stars, dec_rec_gal), axis=0)
         self._current_rec = utils.rca_format(dec_rec)
         return self._current_rec
-
+    
     def MtX(self, x):
         """Adjoint to degradation operator :func:`MX`.
 

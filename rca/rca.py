@@ -124,6 +124,8 @@ class RCA(object):
             (e.g. from SExtractor) or 1-sigma width of the best matching 2D Gaussian. Default is ``'fwhm'``.
         flux: np.ndarray
             Flux levels. Default is ``None``; will be estimated from data if not provided.
+        method: int
+            Method 1 is RCA and method 2 is RCA++. Default is RCA.
         nb_iter: int
             Number of overall iterations (i.e. of alternations) after initialization with RCA. Note the weights do not get updated the last time around, so they actually get ``nb_iter-1`` updates.
             Default is 2.          
@@ -156,18 +158,7 @@ class RCA(object):
         self.im_hr_shape = (self.upfact*self.shap[0],self.upfact*self.shap[1],self.shap_stars[2])
         self.stars_pos = stars_pos
         self.gal_pos = gal_pos        
-        '''
-        if obs_weights is None:
-            self.obs_weights = np.ones(self.shap) #/ self.shap[2]
-        elif obs_weights.shape == self.shap:
-            self.obs_weights = obs_weights / np.expand_dims(np.sum(obs_weights,axis=2), 2) * self.shap[2]
-        elif obs_weights.shape == (self.shap[2],):
-            self.obs_weights = obs_weights.reshape(1,1,-1) / np.sum(obs_weights) * self.shap[2]
-        else:
-            raise ValueError(
-            'Shape mismatch; weights should be of shape {} (for per-pixel weights) or {} (per-observation)'.format(
-                             self.shap, self.shap[2:]))
-        '''
+
         if S is None:
             self.S = np.zeros(self.im_hr_shape[:2] + (self.n_comp,))
         else:
@@ -267,19 +258,7 @@ class RCA(object):
         # Interpolate weights
         M = utils.thin_plate_interpolation(test_pos, self.stars_pos)
         test_weights = self.weights_stars.dot(M.T)
-       
-        '''
-        ntest = test_pos.shape[0]
-        test_weights = np.empty((self.n_comp, ntest))
-        for j,pos in enumerate(test_pos):
-            # determine neighbors
-            nbs, pos_nbs = utils.return_neighbors(pos, self.obs_pos, self.A.T, n_neighbors)
-            # train RBF and interpolate for each component
-            for i in range(self.n_comp):
-                rbfi = Rbf(pos_nbs[:,0], pos_nbs[:,1], nbs[:,i], function=rbf_function)
-                test_weights[i,j] = rbfi(pos[0], pos[1])
 
-        '''
         PSFs = self._transform(test_weights)
         if apply_degradation:
             shift_kernels, _ = utils.shift_ker_stack(shifts,self.upfact)
@@ -382,8 +361,116 @@ window of 7.5 pixels.''')
         self.VT, self.alpha, self.distances = gber.VT, gber.alpha, gber.distances
         self.sel_e, self.sel_a = gber.sel_e, gber.sel_a
         self.weights_stars = self.alpha.dot(self.VT)                 
-        
+
     def _fit(self):
+        weights_stars = self.weights_stars
+        comp = self.S
+        alpha = self.alpha
+        #### Source updates set-up ####
+        # initialize dual variable and compute Starlet filters for Condat source updates 
+        dual_var = np.zeros((self.im_hr_shape))
+        if self.default_filters:
+            self.Phi_filters = get_mr_filters(self.im_hr_shape[:2], opt=self.opt, coarse=True)
+        rho_phi = np.sqrt(np.sum(np.sum(np.abs(self.Phi_filters),axis=(1,2))**2))
+        
+        # Set up source updates, starting with the gradient
+        source_grad = grads2.SourceGrad(self.obs_stars, weights_stars, self.flux, self.sigs_stars, 
+                                      self.shift_ker_stack, self.shift_ker_stack_adj, 
+                                      self.upfact, self.Phi_filters)
+
+        # sparsity in Starlet domain prox (this is actually assuming synthesis form)
+        sparsity_prox = rca_prox.StarletThreshold(0) # we'll update to the actual thresholds later
+
+        # and the linear recombination for the positivity constraint
+        lin_recombine = rca_prox.LinRecombine(weights_stars, self.Phi_filters)
+
+        #### Weight updates set-up ####
+        # gradient
+        weight_grad = grads2.CoeffGrad(self.obs_stars, comp, self.VT, self.flux, self.sigs_stars, 
+                                      self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact)
+        
+        # cost function
+        weight_cost = costObj([weight_grad], verbose=self.modopt_verb) 
+        source_cost = costObj([source_grad], verbose=self.modopt_verb)
+        
+        # k-thresholding for spatial constraint
+        iter_func = lambda x: np.floor(np.sqrt(x))+1
+        coeff_prox = rca_prox.KThreshold(iter_func)
+        
+
+        for k in range(self.nb_iter):
+            " ============================== Sources estimation =============================== "
+            # update gradient instance with new weights...
+            source_grad.update_A(weights_stars)
+            
+            # ... update linear recombination weights...
+            lin_recombine.update_A(weights_stars)
+            
+            # ... set optimization parameters...
+            beta = source_grad.spec_rad + rho_phi
+            #beta = 0.6563937030792308 + rho_phi
+            tau = 1./beta
+            sigma = 1./lin_recombine.norm * beta/2
+
+            # ... update sparsity prox thresholds...
+            thresh = utils.reg_format(utils.acc_sig_maps(self.shap,self.shift_ker_stack_adj,self.sigs_stars,
+                                                        self.flux,self.flux_ref,self.upfact,weights_stars,
+                                                        sig_data=np.ones((self.shap[2],))*self.sig_min))
+            thresholds = self.ksig*np.sqrt(np.array([filter_convolve(Sigma_k**2,self.Phi_filters**2) 
+                                              for Sigma_k in thresh]))
+
+            sparsity_prox.update_threshold(tau*thresholds)
+            
+            # and run source update:
+            transf_comp = rca_prox.apply_transform(comp, self.Phi_filters)
+            if self.nb_reweight:
+                reweighter = cwbReweight(thresholds)
+                for _ in range(self.nb_reweight):
+                    source_optim = optimalg.Condat(transf_comp, dual_var, source_grad, sparsity_prox,
+                                                   Positivity(), linear = lin_recombine, cost=source_cost,
+                                                   max_iter=self.nb_subiter_S, tau=tau, sigma=sigma)
+                    transf_comp = source_optim.x_final
+                    reweighter.reweight(transf_comp)
+                    thresholds = reweighter.weights 
+            else:
+                source_optim = optimalg.Condat(transf_comp, dual_var, source_grad, sparsity_prox,
+                                               Positivity(), linear = lin_recombine, cost=source_cost,
+                                               max_iter=self.nb_subiter_S, tau=tau, sigma=sigma)
+                transf_comp = source_optim.x_final
+            comp = utils.rca_format(np.array([filter_convolve(transf_compj, self.Phi_filters, True)
+                                    for transf_compj in transf_comp]))
+            
+            #TODO: replace line below with Fred's component selection (to be extracted from `low_rank_global_src_est_comb`)
+            ind_select = range(comp.shape[2])
+
+
+            " ============================== Weights estimation =============================== "
+            if k < self.nb_iter-1: 
+                # update sources and reset iteration counter for K-thresholding
+                weight_grad.update_S(comp)
+                coeff_prox.reset_iter()
+                weight_optim = optimalg.ForwardBackward(alpha, weight_grad, coeff_prox, cost=weight_cost,
+                                                beta_param=weight_grad.inv_spec_rad, auto_iterate=False)
+                weight_optim.iterate(max_iter=self.nb_subiter_weights)
+                alpha = weight_optim.x_final
+                weights_k = alpha.dot(self.VT)
+
+                # renormalize to break scale invariance
+                weight_norms = np.sqrt(np.sum(weights_k**2,axis=1)) 
+                comp *= weight_norms
+                weights_k /= weight_norms.reshape(-1,1)
+                #TODO: replace line below with Fred's component selection 
+                ind_select = range(weights_stars.shape[0])
+                weights_stars = weights_k[ind_select,:]
+                supports = None #TODO
+    
+        self.weights_stars = weights_stars
+        self.S = comp
+        self.alpha = alpha
+        source_grad.MX(transf_comp)
+        self.current_rec = source_grad._current_rec           
+        
+    def _fit2(self):
         weights_stars = self.weights_stars
         comp = self.S
         alpha = self.alpha
@@ -502,115 +589,7 @@ window of 7.5 pixels.''')
         self.S = comp
         self.alpha = alpha
         source_grad.MX(transf_comp)
-        self.current_rec = source_grad._current_rec            
-
-    def _fit2(self):
-        weights_stars = self.weights_stars
-        comp = self.S
-        alpha = self.alpha
-        #### Source updates set-up ####
-        # initialize dual variable and compute Starlet filters for Condat source updates 
-        dual_var = np.zeros((self.im_hr_shape))
-        if self.default_filters:
-            self.Phi_filters = get_mr_filters(self.im_hr_shape[:2], opt=self.opt, coarse=True)
-        rho_phi = np.sqrt(np.sum(np.sum(np.abs(self.Phi_filters),axis=(1,2))**2))
-        
-        # Set up source updates, starting with the gradient
-        source_grad = grads2.SourceGrad(self.obs_stars, weights_stars, self.flux, self.sigs_stars, 
-                                      self.shift_ker_stack, self.shift_ker_stack_adj, 
-                                      self.upfact, self.Phi_filters)
-
-        # sparsity in Starlet domain prox (this is actually assuming synthesis form)
-        sparsity_prox = rca_prox.StarletThreshold(0) # we'll update to the actual thresholds later
-
-        # and the linear recombination for the positivity constraint
-        lin_recombine = rca_prox.LinRecombine(weights_stars, self.Phi_filters)
-
-        #### Weight updates set-up ####
-        # gradient
-        weight_grad = grads2.CoeffGrad(self.obs_stars, comp, self.VT, self.flux, self.sigs_stars, 
-                                      self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact)
-        
-        # cost function
-        weight_cost = costObj([weight_grad], verbose=self.modopt_verb) 
-        source_cost = costObj([source_grad], verbose=self.modopt_verb)
-        
-        # k-thresholding for spatial constraint
-        iter_func = lambda x: np.floor(np.sqrt(x))+1
-        coeff_prox = rca_prox.KThreshold(iter_func)
-        
-
-        for k in range(self.nb_iter):
-            " ============================== Sources estimation =============================== "
-            # update gradient instance with new weights...
-            source_grad.update_A(weights_stars)
-            
-            # ... update linear recombination weights...
-            lin_recombine.update_A(weights_stars)
-            
-            # ... set optimization parameters...
-            beta = source_grad.spec_rad + rho_phi
-            #beta = 0.6563937030792308 + rho_phi
-            tau = 1./beta
-            sigma = 1./lin_recombine.norm * beta/2
-
-            # ... update sparsity prox thresholds...
-            thresh = utils.reg_format(utils.acc_sig_maps(self.shap,self.shift_ker_stack_adj,self.sigs_stars,
-                                                        self.flux,self.flux_ref,self.upfact,weights_stars,
-                                                        sig_data=np.ones((self.shap[2],))*self.sig_min))
-            thresholds = self.ksig*np.sqrt(np.array([filter_convolve(Sigma_k**2,self.Phi_filters**2) 
-                                              for Sigma_k in thresh]))
-
-            sparsity_prox.update_threshold(tau*thresholds)
-            
-            # and run source update:
-            transf_comp = rca_prox.apply_transform(comp, self.Phi_filters)
-            if self.nb_reweight:
-                reweighter = cwbReweight(thresholds)
-                for _ in range(self.nb_reweight):
-                    source_optim = optimalg.Condat(transf_comp, dual_var, source_grad, sparsity_prox,
-                                                   Positivity(), linear = lin_recombine, cost=source_cost,
-                                                   max_iter=self.nb_subiter_S, tau=tau, sigma=sigma)
-                    transf_comp = source_optim.x_final
-                    reweighter.reweight(transf_comp)
-                    thresholds = reweighter.weights 
-            else:
-                source_optim = optimalg.Condat(transf_comp, dual_var, source_grad, sparsity_prox,
-                                               Positivity(), linear = lin_recombine, cost=source_cost,
-                                               max_iter=self.nb_subiter_S, tau=tau, sigma=sigma)
-                transf_comp = source_optim.x_final
-            comp = utils.rca_format(np.array([filter_convolve(transf_compj, self.Phi_filters, True)
-                                    for transf_compj in transf_comp]))
-            
-            #TODO: replace line below with Fred's component selection (to be extracted from `low_rank_global_src_est_comb`)
-            ind_select = range(comp.shape[2])
-
-
-            " ============================== Weights estimation =============================== "
-            if k < self.nb_iter-1: 
-                # update sources and reset iteration counter for K-thresholding
-                weight_grad.update_S(comp)
-                coeff_prox.reset_iter()
-                weight_optim = optimalg.ForwardBackward(alpha, weight_grad, coeff_prox, cost=weight_cost,
-                                                beta_param=weight_grad.inv_spec_rad, auto_iterate=False)
-                weight_optim.iterate(max_iter=self.nb_subiter_weights)
-                alpha = weight_optim.x_final
-                weights_k = alpha.dot(self.VT)
-
-                # renormalize to break scale invariance
-                weight_norms = np.sqrt(np.sum(weights_k**2,axis=1)) 
-                comp *= weight_norms
-                weights_k /= weight_norms.reshape(-1,1)
-                #TODO: replace line below with Fred's component selection 
-                ind_select = range(weights_stars.shape[0])
-                weights_stars = weights_k[ind_select,:]
-                supports = None #TODO
-    
-        self.weights_stars = weights_stars
-        self.S = comp
-        self.alpha = alpha
-        source_grad.MX(transf_comp)
-        self.current_rec = source_grad._current_rec        
+        self.current_rec = source_grad._current_rec                 
         
     def _transform(self, weights):
         return self.S.dot(weights)
