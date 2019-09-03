@@ -480,7 +480,6 @@ window of 7.5 pixels.''')
         #### Source updates set-up ####
         # interpolation matrix
         M = utils.thin_plate_interpolation(self.gal_pos, self.stars_pos)
-        weights_gal = self.weights_stars.dot(M.T)
         
         # Initialize dual variable and compute Starlet filters for Condat source updates 
         dual_var = np.zeros((self.im_hr_shape))
@@ -561,6 +560,12 @@ window of 7.5 pixels.''')
             ind_select = range(comp.shape[2])
 
             if k < self.nb_iter-1:
+                " ============================== Galaxies estimation =============================== "                
+                psf = utils.reg_format(comp.dot(weights_stars).dot(M.T))                
+                psf_norm = np.sum(psf,(1,2))
+                psf /= psf_norm.reshape(-1,1,1)                             
+                est_gal, _, _ = sf_deconvolve.run(utils.reg_format(self.obs_gal), psf, **opts)
+                est_gal /= psf_norm.reshape(-1,1,1)                   
                 
                 " ============================== Weights estimation =============================== "
                 #### Weight update ####
@@ -580,14 +585,7 @@ window of 7.5 pixels.''')
                 #TODO: replace line below with Fred's component selection 
                 ind_select = range(weights_stars.shape[0])
                 weights_stars = weights_k[ind_select,:]
-                supports = None #TODO
-                
-                " ============================== Galaxies estimation =============================== "                
-                psf = utils.reg_format(comp.dot(weights_stars).dot(M.T))                
-                psf_norm = np.sum(psf,(1,2))
-                psf /= psf_norm.reshape(-1,1,1)                             
-                est_gal, _, _ = sf_deconvolve.run(utils.reg_format(self.obs_gal), psf, **opts)
-                est_gal /= psf_norm.reshape(-1,1,1)                
+                supports = None #TODO             
     
         self.weights_stars = weights_stars
         self.S = comp
