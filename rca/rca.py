@@ -88,7 +88,7 @@ class RCA(object):
         
     def fit(self, obs_stars, obs_gal, stars_pos, gal_pos, S=None, VT=None, alpha=None,
             shifts=None, sigs=None, psf_size=None, psf_size_type='fwhm',
-            flux=None, method=1, nb_iter=2, nb_subiter_S=200, nb_reweight=0, 
+            flux=None, method=2, nb_iter=2, nb_subiter_S=200, nb_reweight=0, 
             nb_subiter_weights=None, n_eigenvects=5, graph_kwargs={}):
         """ Fits RCA to observed star field.
         
@@ -362,6 +362,7 @@ window of 7.5 pixels.''')
         self.sel_e, self.sel_a = gber.sel_e, gber.sel_a
         self.weights_stars = self.alpha.dot(self.VT)                 
 
+    ## RCA
     def _fit(self):
         weights_stars = self.weights_stars
         comp = self.S
@@ -469,7 +470,8 @@ window of 7.5 pixels.''')
         self.alpha = alpha
         source_grad.MX(transf_comp)
         self.current_rec = source_grad._current_rec           
-        
+     
+    ## RCA++
     def _fit2(self):
         weights_stars = self.weights_stars
         comp = self.S
@@ -477,7 +479,8 @@ window of 7.5 pixels.''')
         
         #### Source updates set-up ####
         # interpolation matrix
-        M = utils.thin_plate_interpolation(self.gal_pos, self.stars_pos) 
+        M = utils.thin_plate_interpolation(self.gal_pos, self.stars_pos)
+        weights_gal = self.weights_stars.dot(M.T)
         
         # Initialize dual variable and compute Starlet filters for Condat source updates 
         dual_var = np.zeros((self.im_hr_shape))
@@ -558,12 +561,6 @@ window of 7.5 pixels.''')
             ind_select = range(comp.shape[2])
 
             if k < self.nb_iter-1:
-                " ============================== Galaxies estimation =============================== "                
-                psf = utils.reg_format(comp.dot(weights_stars).dot(M.T))                
-                psf_norm = np.sum(psf,(1,2))
-                psf /= psf_norm.reshape(-1,1,1)                             
-                est_gal, _, _ = sf_deconvolve.run(utils.reg_format(self.obs_gal), psf, **opts)
-                est_gal /= psf_norm.reshape(-1,1,1)
                 
                 " ============================== Weights estimation =============================== "
                 #### Weight update ####
@@ -584,12 +581,19 @@ window of 7.5 pixels.''')
                 ind_select = range(weights_stars.shape[0])
                 weights_stars = weights_k[ind_select,:]
                 supports = None #TODO
+                
+                " ============================== Galaxies estimation =============================== "                
+                psf = utils.reg_format(comp.dot(weights_stars).dot(M.T))                
+                psf_norm = np.sum(psf,(1,2))
+                psf /= psf_norm.reshape(-1,1,1)                             
+                est_gal, _, _ = sf_deconvolve.run(utils.reg_format(self.obs_gal), psf, **opts)
+                est_gal /= psf_norm.reshape(-1,1,1)                
     
         self.weights_stars = weights_stars
         self.S = comp
         self.alpha = alpha
         source_grad.MX(transf_comp)
-        self.current_rec = source_grad._current_rec                 
+        self.current_rec = source_grad._current_rec                      
         
     def _transform(self, weights):
         return self.S.dot(weights)

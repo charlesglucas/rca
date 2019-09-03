@@ -1,11 +1,11 @@
-RCA
+RCA++
 ===
 Resolved Component Analysis
 
-v2.0
+v1.0
 
 ## Description
-RCA is a PSF modelling python package. It enforces several constraints, notably some related to sparsity and spatial structure, to build a spatially-varying PSF model from observed, noisy and possibly undersampled star stamps. Some modicum of documentation can be found [here](https://morganschmitz.github.io/rca/) - see also [quick start](#quick-start) below.
+RCA++ is a PSF modelling python package. It is an extension to the RCA method which the documentation can be found [here](https://morganschmitz.github.io/rca/). It enforces constraints related to positivity, sparsity and spatial structure to build a spatially-varying PSF model from observed, noisy and possibly undersampled stars and galaxies. Some modicum of documentation can be found [here](https://morganschmitz.github.io/rca/) - see also [quick start](#quick-start) below.
 
 ## Requirements
 The following python packages are required:
@@ -20,14 +20,14 @@ You will also need a compiled version of the sparse2d module of [ISAP](http://ww
 After installing all dependencies, RCA just needs to be cloned and python-installed:
 
 ```
-git clone https://github.com/MorganSchmitz/rca.git
+git clone https://github.com/charlesglucas/rca.git
 cd rca
 python setup.py install
 ```
 
 ## References
   - [Ngolè et al., 2016](https://arxiv.org/abs/1608.08104) - Inverse Problems, 32(12)
-  - Schmitz et al., 2019 - forthcoming
+  - [Schmitz et al., 2019](https://arxiv.org/abs/1906.07676)
   
 ## Quick start
 The basic syntax to run RCA is as follows:
@@ -38,23 +38,25 @@ from rca import RCA
 # initialize RCA instance:
 rca_fitter = RCA(4)
 
-# fit it to stars
-rca_fitter.fit(stars, star_positions)
+# fit it to data
+S, A = rca_runner.fit(stars, galaxies, stars_posistions, galaxies_positions)
 
 # return PSF model at positions of interest
 psfs = rca_fitter.estimate_psf(galaxy_positions)
 ```
-A complete list of the parameters for `RCA` and its `fit` and `estimate_psf` methods can be found in [the documentation](https://morganschmitz.github.io/rca/rca.html#module-rca). The main ones to take into account are:
+A complete list of the parameters for `RCA` and its `fit` and `estimate_psf` methods can be found in [the documentation](https://morganschmitz.github.io/rca/rca.html#module-rca). The parameter for `RCA++` are the ones of `RCA` and the boolean parameter `method`. The main parameters to take into account are:
 
-  - RCA initialization:
+  - RCA++ initialization:
     - `n_comp`, the number of eigenPSFs to learn ("r" in the papers)
     - `upfact`, the upsampling factor if superresolution is required ("m_d" or "D" in the papers)
   - `fit`:
-    - `obs_data` should contain your observed stars (see note below for formatting conventions)
-    - `obs_pos`, their respective positions
+    - `obs_stars` should contain your observed stars (see note below for formatting conventions)
+    - `obs_gal` should contain your observed galaxies (see note below for formatting conventions)
+    - `stars_pos` and `gal_pos`, their respective positions
     - either `shifts` (with their respective centroid shifts wrt. a common arbitrary grid) or, if they are to be estimated from the data, a rough estimation of the `psf_size` (for the window function - can be given in FWHM, R^2 or Gaussian sigma)
   - `estimate_psf`:
     - `test_pos`, the positions at which the PSF should be estimated
+    -  `method` is a boolean to select either the RCA method (`method=1`) the RCA++ method (`method=2`). By default, `method=2`.
 
 The rest can largely be left to default values for basic usage.
 
