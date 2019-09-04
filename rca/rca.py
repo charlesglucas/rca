@@ -375,7 +375,7 @@ window of 7.5 pixels.''')
         rho_phi = np.sqrt(np.sum(np.sum(np.abs(self.Phi_filters),axis=(1,2))**2))
         
         # Set up source updates, starting with the gradient
-        source_grad = grads2.SourceGrad(self.obs_stars, weights_stars, self.flux, self.sigs_stars, 
+        source_grad = grads.SourceGrad(self.obs_stars, weights_stars, self.flux, self.sigs_stars, 
                                       self.shift_ker_stack, self.shift_ker_stack_adj, 
                                       self.upfact, self.Phi_filters)
 
@@ -387,7 +387,7 @@ window of 7.5 pixels.''')
 
         #### Weight updates set-up ####
         # gradient
-        weight_grad = grads2.CoeffGrad(self.obs_stars, comp, self.VT, self.flux, self.sigs_stars, 
+        weight_grad = grads.CoeffGrad(self.obs_stars, comp, self.VT, self.flux, self.sigs_stars, 
                                       self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact)
         
         # cost function
@@ -495,7 +495,7 @@ window of 7.5 pixels.''')
         est_gal = utils.reg_format(np.zeros(self.shap_gal))
 
         # Set up source updates, starting with the gradient
-        source_grad = grads.SourceGrad(self.obs_data, weights_stars, M, est_gal, self.flux, self.sigs_stars, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact, self.Phi_filters)
+        source_grad = grads2.SourceGrad(self.obs_data, weights_stars, M, est_gal, self.flux, self.sigs_stars, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact, self.Phi_filters)
         
         # sparsity in Starlet domain prox (this is actually assuming synthesis form)
         sparsity_prox = rca_prox.StarletThreshold(0) # we'll update to the actual thresholds later
@@ -504,7 +504,7 @@ window of 7.5 pixels.''')
         lin_recombine = rca_prox.LinRecombine(weights_stars, self.Phi_filters)
 
         #### Weight updates set-up ####                
-        weight_grad = grads.CoeffGrad(self.obs_data, comp, self.VT, M, est_gal, self.flux, self.sigs_stars, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact)
+        weight_grad = grads2.CoeffGrad(self.obs_data, comp, self.VT, M, est_gal, self.flux, self.sigs_stars, self.shift_ker_stack, self.shift_ker_stack_adj, self.upfact)
         
         # cost function
         weight_cost = costObj([weight_grad], verbose=self.modopt_verb) 
