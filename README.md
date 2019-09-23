@@ -1,6 +1,6 @@
 RCA++
 ===
-Resolved Component Analysis
+Resolved Component Analysis II
 
 v1.0
 
