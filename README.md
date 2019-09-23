@@ -17,7 +17,7 @@ The following python packages are required:
 You will also need a compiled version of the sparse2d module of [ISAP](http://www.cosmostat.org/software/isap); alternatively, you should be able to install [PySAP](https://github.com/CEA-COSMIC/pysap) and let it handle the compilation and installation of sparse2d.
 
 ## Installation
-After installing all dependencies, RCA just needs to be cloned and python-installed:
+After installing all dependencies, RCA++ just needs to be cloned and python-installed:
 
 ```
 git clone https://github.com/charlesglucas/rca.git
@@ -30,7 +30,7 @@ python setup.py install
   - [Schmitz et al., 2019](https://arxiv.org/abs/1906.07676)
   
 ## Quick start
-The basic syntax to run RCA is as follows:
+The basic syntax to run RCA++ is as follows:
 
 ```
 from rca import RCA
@@ -65,4 +65,4 @@ Note `RCA.fit` expects the data to be stored in a `(p, p, n_data)` array, that i
 An example with simulated images can also be found in the `example` folder.
 
 ## Changelog
-RCA++ is an extension of RCA which can be accessed [here](https://github.com/CosmoStat/rca). It adds the information from galaxies using the [sf_deconvolve](https://github.com/CosmoStat/sf_deconvolve) algorithm.
+RCA++ is an extension of RCA which can be accessed [here](https://github.com/CosmoStat/rca). It adds information from galaxies using the [sf_deconvolve](https://github.com/CosmoStat/sf_deconvolve) algorithm.
