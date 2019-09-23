@@ -60,7 +60,7 @@ A complete list of the parameters for `RCA` and its `fit` and `estimate_psf` met
 
 The rest can largely be left to default values for basic usage.
 
-Note `RCA.fit` expects the data to be stored in a `(p, p, n_data)` array, that is, with the indexing (over objects) in the _last_ axis. You can use `rca.utils.rca_format` to convert to the proper format from the more conventional `(n_stars, p, p)`.
+Note `RCA.fit` expects the data to be stored in a `(p, p, n_data)` array, that is, with the indexing (over objects) in the _last_ axis. You can use `rca.utils.rca_format` to convert to the proper format from the more conventional `(n_data, p, p)`.
 
 An example with simulated images can also be found in the `example` folder.
 
