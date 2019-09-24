@@ -39,7 +39,7 @@ from rca import RCA
 rca_fitter = RCA(4)
 
 # fit it to data
-S, A = rca_runner.fit(stars, galaxies, stars_posistions, galaxies_positions)
+S, A = rca_runner.fit(stars, galaxies, star_posistions, galaxy_positions)
 
 # return PSF model at positions of interest
 psfs = rca_fitter.estimate_psf(galaxy_positions)
