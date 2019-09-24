@@ -44,13 +44,13 @@ S, A = rca_runner.fit(stars, galaxies, star_posistions, galaxy_positions)
 # return PSF model at positions of interest
 psfs = rca_fitter.estimate_psf(galaxy_positions)
 ```
-A complete list of the parameters for `RCA` and its `fit` and `estimate_psf` methods can be found in [the documentation](https://morganschmitz.github.io/rca/rca.html#module-rca). The parameters for `RCA++` are the ones for `RCA` and the boolean parameter `method` to select either the `RCA` method (`method=1`) or the `RCA++` method (`method=2`). By default, `method=2`. 
+A complete list of the parameters for `RCA` and its `fit` and `estimate_psf` methods can be found in [the documentation](https://morganschmitz.github.io/rca/rca.html#module-rca). The parameters for `RCA++` are the ones for `RCA` and the boolean parameter `method` to select either `RCA` (`method=1`) or `RCA++` (`method=2`). By default, `method=2`. 
 
 The main parameters to take into account are:
 
   - RCAs initialization:
     - `n_comp`, the number of eigenPSFs to learn ("r" in the papers)
-    - `upfact`, the upsampling factor if superresolution is required ("m_d" or "D" in the papers), only available with RCA in the package
+    - `upfact`, the upsampling factor if superresolution is required ("m_d" or "D" in the papers), only available with `RCA` in the package
   - `fit`:
     - `obs_stars` should contain your observed stars (see note below for formatting conventions)
     - `obs_gal` should contain your observed galaxies (see note below for formatting conventions)
