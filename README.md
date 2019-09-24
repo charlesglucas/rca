@@ -64,4 +64,4 @@ Note `RCA.fit` expects the data to be stored in a `(p, p, n_data)` array, that i
 An example with simulated images can also be found in the `example` folder.
 
 ## Changelog
-RCA++ is an extension of RCA which can be accessed [here](https://github.com/CosmoStat/rca). It adds information from galaxies using the [sf_deconvolve](https://github.com/CosmoStat/sf_deconvolve) algorithm.
+RCA++ has been coded as an extension of RCA which can be accessed [here](https://github.com/CosmoStat/rca). It adds information from galaxies using the [sf_deconvolve](https://github.com/CosmoStat/sf_deconvolve) algorithm.
