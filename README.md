@@ -13,6 +13,7 @@ The following python packages are required:
   - numpy
   - scipy
   - [ModOpt](https://github.com/CEA-COSMIC/ModOpt)
+  - [sf_deconvolve](https://github.com/CosmoStat/sf_deconvolve)
   
 You will also need a compiled version of the sparse2d module of [ISAP](http://www.cosmostat.org/software/isap); alternatively, you should be able to install [PySAP](https://github.com/CEA-COSMIC/pysap) and let it handle the compilation and installation of sparse2d.
 
@@ -50,7 +51,6 @@ The main parameters to take into account are:
 
   - RCAs initialization:
     - `n_comp`, the number of eigenPSFs to learn ("r" in the papers)
-    - `upfact`, the upsampling factor if superresolution is required ("m_d" or "D" in the papers), only available with `RCA` in the package
   - `fit`:
     - `obs_stars` should contain your observed stars (see note below for formatting conventions)
     - `obs_gal` should contain your observed galaxies (see note below for formatting conventions)
@@ -64,4 +64,6 @@ Note `RCA.fit` expects the data to be stored in a `(p, p, n_data)` array, that i
 An example with simulated images can also be found in the `example` folder.
 
 ## Changelog
-RCA++ has been coded as an extension of RCA which can be accessed [here](https://github.com/CosmoStat/rca). It adds information from galaxies using the [sf_deconvolve](https://github.com/CosmoStat/sf_deconvolve) algorithm.
+RCA++ has been implemented as an extension of RCA which can be accessed [here](https://github.com/CosmoStat/rca). It adds information from galaxies using the [Farrens et al. (2017)](https://www.cosmostat.org/publications/space-variant-deconvolution-of-galaxy-survey-images) algorithm implemented in sf_deconvolve.
+
+The parameter `upfact` (the upsampling factor if superresolution is required) for the initialization of `RCA` is not available with `RCA++` in this package yet.
