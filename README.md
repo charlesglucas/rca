@@ -2,7 +2,8 @@ RCA++
 ===
 Resolved Component Analysis II
 
-v1.0
+## Author
+RCA++ has been implemented by Charles-Gérard Lucas from RCA code which can be accessed [here](https://github.com/CosmoStat/rca).
 
 ## Description
 RCA++ is a PSF modelling python package. It is an extension to the RCA method which the documentation can be found [here](https://morganschmitz.github.io/rca/). It enforces constraints related to positivity, sparsity and spatial structure to build a spatially-varying PSF model from observed, noisy and possibly undersampled stars and galaxies. Some modicum of documentation can be found [here](https://morganschmitz.github.io/rca/) - see also [quick start](#quick-start) below.
