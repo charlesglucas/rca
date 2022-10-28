@@ -1,6 +1,5 @@
-RCA++
+Resolved Component Analysis II (RCA++)
 ===
-Resolved Component Analysis II
 
 ## Author
 RCA++ has been implemented by Charles-Gérard Lucas from RCA code which can be accessed [here](https://github.com/CosmoStat/rca).
