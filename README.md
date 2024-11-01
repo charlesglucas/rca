@@ -1,4 +1,4 @@
-Resolved Component Analysis II (RCA++)
+Resolved Component Analysis II (RCA$^{++}$)
 ===
 
 ## Author
