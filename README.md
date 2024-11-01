@@ -1,4 +1,4 @@
-Resolved Component Analysis II (RCA$^{++}$)
+Resolved Component Analysis II (RCA<sup>++</sup>)
 ===
 
 ## Author
@@ -18,7 +18,7 @@ The following python packages are required:
 You will also need a compiled version of the sparse2d module of [ISAP](http://www.cosmostat.org/software/isap); alternatively, you should be able to install [PySAP](https://github.com/CEA-COSMIC/pysap) and let it handle the compilation and installation of sparse2d.
 
 ## Installation
-After installing all dependencies, RCA++ just needs to be cloned and python-installed:
+After installing all dependencies, RCA<sup>++</sup> just needs to be cloned and python-installed:
 
 ```
 git clone https://github.com/charlesglucas/rca.git
@@ -45,7 +45,7 @@ S, A = rca_runner.fit(stars, galaxies, star_posistions, galaxy_positions)
 # return PSF model at positions of interest
 psfs = rca_fitter.estimate_psf(galaxy_positions)
 ```
-A complete list of the parameters for `RCA` and its `fit` and `estimate_psf` methods can be found in [the documentation](https://morganschmitz.github.io/rca/rca.html#module-rca). The parameters for `RCA++` are the ones for `RCA` and the boolean parameter `method` to select either `RCA` (`method=1`) or `RCA++` (`method=2`). By default, `method=2`. 
+A complete list of the parameters for `RCA` and its `fit` and `estimate_psf` methods can be found in [the documentation](https://morganschmitz.github.io/rca/rca.html#module-rca). The parameters for `RCA++` are the ones for `RCA` and the boolean parameter `method` to select either `RCA` (`method=1`) or `RCA<sup>++</sup>` (`method=2`). By default, `method=2`. 
 
 The main parameters to take into account are:
 
