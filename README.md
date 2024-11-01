@@ -31,7 +31,7 @@ python setup.py install
   - [Schmitz et al., 2019](https://arxiv.org/abs/1906.07676)
   
 ## Quick start
-The basic syntax to run RCA++ is as follows:
+The basic syntax to run RCA<sup>++</sup> is as follows:
 
 ```
 from rca import RCA
